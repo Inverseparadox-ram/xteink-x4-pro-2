@@ -40,6 +40,20 @@ lib/EpdFont/scripts/output/
 sdkconfig.sticky
 sdkconfig.x4pro
 
+# fork-local: the PlatformIO object cache. `.pio` above does not cover it --
+# that pattern matches the build directory exactly, and this is a sibling.
+# scripts_local/lib-sim.sh puts it here on purpose (PLATFORMIO_BUILD_CACHE_DIR)
+# so every worktree shares one content-addressed cache instead of a 7GB copy
+# each; a local simulator build is all it takes to leave 122MB sitting
+# untracked at the tree root.
+.pio-cache/
+
+# fork-local: release artefacts. The release workflow builds `dist/` on a fresh
+# checkout, but anyone who runs the same esptool merge-bin by hand is left with
+# a ~6.8MB -full.bin here. A firmware image is build output; it belongs on a
+# release page, not in the history.
+dist/
+
 # fork-local: simulator screenshots and logs (scripts_local/)
 qa-artifacts/
 # A screenshot dropped at the tree ROOT, which is what sim-shot.sh does when it
