@@ -277,7 +277,13 @@ std::string dayLabelOf(const std::string& isoDate) {
 std::string durationOf(const float seconds) {
   if (seconds <= 0.0f) return "";
   const int total = static_cast<int>(seconds + 0.5f);
-  char text[24];
+  // Sized from the FORMAT, not from the durations a day of daylight produces.
+  // An int is eleven characters with its sign, and "%dh %02dm" can therefore
+  // print 26 -- host-tests/fmtwidth counts exactly this, and a buffer sized by
+  // what the data "obviously" holds is how a truncation ships.
+  static constexpr int kIntChars = 11;
+  static constexpr int kDurationChars = 2 * kIntChars + 3 + 1;  // "%dh %02dm" plus NUL
+  char text[kDurationChars];
   std::snprintf(text, sizeof(text), "%dh %02dm", total / 3600, (total % 3600) / 60);
   return text;
 }

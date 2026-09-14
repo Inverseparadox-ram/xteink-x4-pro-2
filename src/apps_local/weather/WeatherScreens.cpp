@@ -117,23 +117,16 @@ void placeChrome(toybox::Screen& screen, const char* place, const char* rightLab
   fui::TextStyle bandTitle = screen.theme().bodyText;
   bandTitle.color = fui::Color::White;
   bandTitle.maxLines = 1;
-  const fui::TextStyle& labelStyle = screen.theme().smallText;
-  const int16_t labelWidth =
-      rightLabel != nullptr && rightLabel[0] != '\0'
-          ? static_cast<int16_t>(screen.target().measureText(labelStyle.font, rightLabel, labelStyle).width +
-                                 toybox::kGutter)
-          : 0;
-  // The trailing button takes band height less its own padding, which is what
-  // the header component itself reserves; subtracting the same number here
-  // keeps the fitted title and the drawn title in agreement.
-  const int16_t buttonWidth =
-      refreshable ? static_cast<int16_t>(screen.theme().headerHeight - 8 + toybox::kGutter) : 0;
-  const int16_t room =
-      static_cast<int16_t>(screen.device().width - 2 * toybox::kMargin - labelWidth - buttonWidth);
-  const std::string fitted = toybox::fitLines(screen.target(), place, room, 1, bandTitle);
-
+  // The title is NOT pre-fitted here. toybox::headerBand() fits it itself,
+  // against toybox::headerTitleWidth(), which subtracts every term the header
+  // component subtracts -- the side padding, the right label AND the trailing
+  // button -- in the same order. Doing it again here meant a second copy of
+  // that arithmetic, and the copy reached for the band height to size the
+  // button: an additive expression on .headerHeight, which is precisely what
+  // host-tests/chromeguard exists to stop, because a name for the black band
+  // knows nothing about the rule drawn under it.
   fui::HeaderProps header;
-  header.title = fitted.c_str();
+  header.title = place;
   header.rightLabel = rightLabel;
   header.borderEdges = fui::EdgesNone;
   header.titleText = bandTitle;
