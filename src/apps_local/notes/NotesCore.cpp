@@ -154,9 +154,32 @@ uint32_t nextId(const std::vector<Note>& notes) {
 }
 
 std::string sanitize(std::string text, const size_t maxChars) {
-  // A CR is a line ending the keyboard never produces and a pasted file might.
-  text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
-  while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\n')) text.pop_back();
+  // Control characters, at the ONE boundary everything typed or read passes
+  // through. The renderer has no glyph for them and says so -- "No glyph for
+  // codepoint 9" is a tab -- and its own advice is to sanitise where the text
+  // entered rather than at the draw call. Notes are the one place in this fork
+  // where text arrives from a file a person may have edited by hand: the
+  // exports under /Notes exist precisely so notes can be opened on a computer,
+  // and somebody who does that will sooner or later paste a tab into the store.
+  //
+  // A tab becomes a space rather than disappearing, because it is whitespace
+  // and a space is the honest rendering of it on a panel with no tab stops.
+  // Every other C0 control and DEL is dropped: none of them is content, and a
+  // newline is the only one this app means anything by.
+  std::string clean;
+  clean.reserve(text.size());
+  for (const char c : text) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    if (u == '\n') {
+      clean += '\n';
+    } else if (u == '\t') {
+      clean += ' ';
+    } else if (u >= 0x20 && u != 0x7F) {
+      clean += c;
+    }
+  }
+  text = std::move(clean);
+  while (!text.empty() && (text.back() == ' ' || text.back() == '\n')) text.pop_back();
   if (text.size() <= maxChars) return text;
   // Cut on a UTF-8 boundary. Cutting mid-sequence leaves a byte the renderer
   // draws as a replacement box and the export writes as an invalid file.

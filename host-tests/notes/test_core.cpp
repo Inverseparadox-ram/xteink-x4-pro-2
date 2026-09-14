@@ -72,11 +72,14 @@ static void testDoneCount() {
 static void testRoundTrip() {
   std::vector<notes::Note> in;
   in.push_back(textNote(1, "Plain\nbody"));
-  // Every character the format itself uses, in content, plus the three
-  // together. A tab inside an item used to end the field; a newline used to
-  // split one item into two.
-  in.push_back(textNote(2, "Tricky\nwith\ta tab\\and a backslash\nand \\n literal"));
-  in.push_back(listNote(3, "Errands\twith a tab", {{"post\noffice", true}, {"back\\slash", false}}));
+  // Every character the format itself uses that can actually reach the store,
+  // plus the pair together. A newline used to split one item into two, and a
+  // backslash used to eat the character after it. Tabs are not here because
+  // sanitize() turns them into spaces before anything is written -- see
+  // testCaps, and testAHandWrittenTabLoadsAsASpace below for the file a person
+  // edits by hand.
+  in.push_back(textNote(2, "Tricky\nwith a backslash \\ and \\n literal"));
+  in.push_back(listNote(3, "Errands \\ and a backslash", {{"post\noffice", true}, {"back\\slash", false}}));
 
   const std::string text = notes::serialize(in);
   std::vector<notes::Note> out;
@@ -95,6 +98,22 @@ static void testRoundTrip() {
       CHECK(out[i].items[j].done == in[i].items[j].done, "note %d item %d done", static_cast<int>(i),
             static_cast<int>(j));
     }
+  }
+}
+
+// The file a person edits by hand. The exports under /Notes exist so notes can
+// be read on a computer, and the store beside them is plain text too, so a tab
+// pasted into either is a matter of time. It must load as a space rather than
+// as the empty box the renderer draws for a codepoint it has no glyph for.
+static void testAHandWrittenTabLoadsAsASpace() {
+  std::vector<notes::Note> out;
+  CHECK(notes::parse("crossplay-notes 1\nN\t1\t1\t0\tTwo\tabbed\t\nI\t0\ta\\tb\n", out), "parses");
+  CHECK(out.size() == 1, "one note");
+  if (out.size() == 1 && out[0].items.size() == 1) {
+    CHECK(out[0].items[0].text == "a b", "an escaped tab in the file becomes a space, got '%s'",
+          out[0].items[0].text.c_str());
+  } else {
+    CHECK(false, "expected one item, got %d", static_cast<int>(out.empty() ? 0 : out[0].items.size()));
   }
 }
 
@@ -145,6 +164,19 @@ static void testCaps() {
   CHECK(notes::sanitize("  trailing   ", 100) == "  trailing", "trailing space is trimmed, leading is not");
   CHECK(notes::sanitize("a\r\nb", 100) == "a\nb", "a CR is never content here");
 
+  // Control characters, caught by the simulator rather than by reasoning: a
+  // seeded store with a literal tab in a body drew nothing and logged
+  // "No glyph for codepoint 9". The renderer has no glyph for any C0 control,
+  // and the store file is hand-editable by anyone who found the /Notes
+  // exports, so this is the boundary that has to stop them.
+  CHECK(notes::sanitize("a\tb", 100) == "a b", "a tab becomes a space, not a missing glyph");
+  CHECK(notes::sanitize("a\x01" "\x1F" "b", 100) == "ab", "other C0 controls are dropped");
+  CHECK(notes::sanitize("a\x7F" "b", 100) == "ab", "DEL is dropped");
+  CHECK(notes::sanitize("keep\nthe\nlines", 100) == "keep\nthe\nlines", "newlines survive: they are content");
+  // The one multi-byte case worth stating: a control filter that worked on
+  // signed chars would eat every byte of a UTF-8 sequence.
+  CHECK(notes::sanitize("caf\xC3\xA9", 100) == "caf\xC3\xA9", "UTF-8 continuation bytes are not controls");
+
   // An id of 0 is the "never saved" value; two of them off the card must not
   // stay 0, or both notes export to the same file.
   std::vector<notes::Note> zeros;
@@ -190,6 +222,7 @@ int main() {
   testTitles();
   testDoneCount();
   testRoundTrip();
+  testAHandWrittenTabLoadsAsASpace();
   testDamagedFile();
   testCaps();
   testExport();
