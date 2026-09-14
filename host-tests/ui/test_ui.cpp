@@ -26,6 +26,7 @@
 #include "../../src/apps_local/hackernews/HackerNewsScreens.h"
 #include "../../src/apps_local/insider/InsiderScreens.h"
 #include "../../src/apps_local/instapaper/InstapaperScreens.h"
+#include "../../src/apps_local/notes/NotesScreens.h"
 #include "../../src/apps_local/jaipur/JaipurScreens.h"
 #include "../../src/apps_local/knucklebones/KnucklebonesScreens.h"
 #include "../../src/apps_local/link/LinkScreens.h"
@@ -8398,6 +8399,38 @@ void testTheForeheadResultsMarkTheUnansweredCardApart() {
 
 // --- Instapaper ------------------------------------------------------------
 
+void buildNotesList(Rendered& out, const notesui::ListModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  notesui::buildList(screen, model);
+}
+
+void buildNotesChecklist(Rendered& out, const notesui::ChecklistModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  notesui::buildChecklist(screen, model);
+}
+
+void buildNotesKindPick(Rendered& out) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  notesui::buildKindPick(screen);
+}
+
+void buildNotesConfirm(Rendered& out, const notesui::ConfirmModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  notesui::buildDeleteConfirm(screen, model);
+}
+
 void buildInstaQueue(Rendered& out, const instapaperui::QueueModel& model) {
   const fui::DeviceContext ctx = device();
   const fui::InputSnapshot noInput{};
@@ -9096,6 +9129,185 @@ void testTheHackerNewsReaderAlsoWrapsOncePerDocument() {
           linesFromTextArea(slow, body, doc.c_str(), style, top));
   }
   CHECK(wrap.wraps() == 1);
+}
+
+// An empty shelf still has to offer the door, for the same reason the empty
+// queue does: an empty shelf is exactly when somebody wants to make a note.
+void testTheEmptyNoteListStillOffersNewNote() {
+  Rendered out;
+  const notesui::ListModel model;
+  buildNotesList(out, model);
+
+  CHECK(drewText(out, "NO NOTES YET"));
+  // The card path is on the empty screen on purpose: a user who cannot find
+  // the exported files is in the same position as one who has none.
+  CHECK(drewText(out, "/Notes"));
+  const fui::DeviceContext ctx = device();
+  const fui::ActionEvent event = out.tap(ctx.width / 2, ctx.height - toybox::kMargin - toybox::kPillHeight / 2);
+  CHECK(event.action == notesui::ActionNewNote);
+}
+
+void testTappingANoteRowOpensThatNote() {
+  Rendered out;
+  fui::ListItem rows[3];
+  const char* titles[3] = {"First note", "Second note", "Third note"};
+  for (int i = 0; i < 3; ++i) {
+    rows[i] = fui::ListItem{};
+    rows[i].label = titles[i];
+    rows[i].subtitle = "NOTE  .  12 MAR";
+    rows[i].value = "";
+    rows[i].actionValue = static_cast<int16_t>(i);
+  }
+  notesui::ListModel model;
+  model.items = rows;
+  model.count = 3;
+  model.countLabel = "3";
+  buildNotesList(out, model);
+
+  CHECK(drewText(out, "Second note"));
+  CHECK(!out.interactions.overflowed());
+
+  const fui::Rect band = notesui::listBand(device());
+  const int16_t rowH = notesui::listRowHeight(out.target, toybox::themeTokens());
+  // The middle of the second row, computed from the same numbers the builder
+  // handed the component.
+  const fui::ActionEvent event = out.tap(band.x + band.width / 2, band.y + rowH + rowH / 2);
+  CHECK(event.action == notesui::ActionOpenNote);
+  CHECK(event.value == 1);
+}
+
+// The whole app in one assertion: OUT of edit mode a row tick is one tap, and
+// nothing else on the row does anything. A build where a row opened an editor
+// instead would still draw identically, which is why this is asserted on the
+// ACTION rather than on the pixels.
+void testTappingAChecklistRowTicksItRatherThanOpeningIt() {
+  Rendered out;
+  const notesui::ChecklistRow rows[3] = {{"post office", true}, {"bank", false}, {"bread", false}};
+  notesui::ChecklistModel model;
+  model.title = "Errands";
+  model.rows = rows;
+  model.count = 3;
+  model.progressLabel = "1/3";
+  buildNotesChecklist(out, model);
+
+  CHECK(drewText(out, "bank"));
+  CHECK(!out.interactions.overflowed());
+
+  const fui::Rect band = notesui::checklistBand(device());
+  const int16_t rowH = notesui::checklistRowHeight(toybox::themeTokens());
+  const fui::ActionEvent event = out.tap(band.x + band.width / 2, band.y + rowH + rowH / 2);
+  CHECK(event.action == notesui::ActionToggleItem);
+  CHECK(event.value == 1);
+}
+
+// The same pixels, the other mode, a different action -- and the band says so.
+// If EDITING were not drawn, this screen would be indistinguishable from the
+// one above while doing something else with the same tap.
+void testEditModeSaysSoAndRetargetsTheSameRow() {
+  Rendered out;
+  const notesui::ChecklistRow rows[2] = {{"post office", true}, {"bank", false}};
+  notesui::ChecklistModel model;
+  model.title = "Errands";
+  model.rows = rows;
+  model.count = 2;
+  model.editing = true;
+  buildNotesChecklist(out, model);
+
+  CHECK(drewText(out, "EDITING"));
+  CHECK(!drewText(out, "Errands"));
+
+  const fui::Rect band = notesui::checklistBand(device());
+  const int16_t rowH = notesui::checklistRowHeight(toybox::themeTokens());
+  const fui::ActionEvent event = out.tap(band.x + band.width / 2, band.y + rowH / 2);
+  CHECK(event.action == notesui::ActionEditItem);
+  CHECK(event.value == 0);
+}
+
+// An item's absolute index survives paging. A tap on the first row of page two
+// must report the item that is drawn there, not item zero.
+void testAChecklistTapReportsTheItemAndNotTheRow() {
+  Rendered out;
+  const notesui::ChecklistRow rows[2] = {{"ninth", false}, {"tenth", false}};
+  notesui::ChecklistModel model;
+  model.rows = rows;
+  model.count = 2;
+  model.firstIndex = 8;
+  buildNotesChecklist(out, model);
+
+  const fui::Rect band = notesui::checklistBand(device());
+  const int16_t rowH = notesui::checklistRowHeight(toybox::themeTokens());
+  const fui::ActionEvent event = out.tap(band.x + band.width / 2, band.y + rowH / 2);
+  CHECK(event.action == notesui::ActionToggleItem);
+  CHECK(event.value == 8);
+}
+
+// A FULL page of rows, which is the case the three-row tests cannot reach.
+// Two things can only break here: the rows can run into the footer bar, and
+// the hit table can overflow -- and an overflowed table means the LAST
+// controls registered are the ones that silently vanish, which is the footer.
+// Both are invisible in a screenshot of a short list.
+void testAFullChecklistPageFitsAboveTheFooterAndRegistersEveryRow() {
+  Rendered out;
+  const fui::Rect band = notesui::checklistBand(device());
+  const int16_t rowH = notesui::checklistRowHeight(toybox::themeTokens());
+  const int visible = band.height / rowH;
+  CHECK(visible > 0);
+
+  std::vector<notesui::ChecklistRow> rows;
+  rows.reserve(static_cast<size_t>(visible));
+  for (int i = 0; i < visible; ++i) rows.push_back(notesui::ChecklistRow{"a thing to do", i % 2 == 0});
+  notesui::ChecklistModel model;
+  model.title = "Errands";
+  model.rows = rows.data();
+  model.count = visible;
+  model.progressLabel = "5/9";
+  buildNotesChecklist(out, model);
+
+  // Not one control lost to the table.
+  CHECK(!out.interactions.overflowed());
+  // The footer is still the footer: the primary control on the action band
+  // answers, rather than a checklist row that grew down into it.
+  const fui::DeviceContext ctx = device();
+  const fui::ActionEvent footer = out.tap(ctx.width / 2, ctx.height - toybox::kMargin - toybox::kPillHeight / 2);
+  CHECK(footer.action == notesui::ActionAddItem);
+  // And every row is still live, including the last one.
+  CHECK(out.tap(band.x + band.width / 2, band.y + rowH / 2).action == notesui::ActionToggleItem);
+  const fui::ActionEvent last = out.tap(band.x + band.width / 2, band.y + (visible - 1) * rowH + rowH / 2);
+  CHECK(last.action == notesui::ActionToggleItem);
+  CHECK(last.value == visible - 1);
+}
+
+// The kind picker offers two answers and both are live. A picker where one
+// button drew but registered nothing is a dead control, which no screenshot
+// would show.
+void testBothNoteKindsAreOfferedAndLive() {
+  Rendered out;
+  buildNotesKindPick(out);
+
+  CHECK(drewText(out, "TEXT NOTE"));
+  CHECK(drewText(out, "CHECKLIST"));
+  CHECK(out.has(notesui::ActionKindText));
+  CHECK(out.has(notesui::ActionKindChecklist));
+  CHECK(!out.interactions.overflowed());
+}
+
+// The safe answer is the prominent one, on the primary-action band a thumb
+// goes to. Asserted by TAPPING that band: a confirm whose DELETE crept onto it
+// would pass any check that only looked for the words.
+void testDeleteConfirmMakesKeepThePrimaryAnswer() {
+  Rendered out;
+  notesui::ConfirmModel model;
+  model.title = "Errands";
+  model.detail = "7 items. This cannot be undone.";
+  buildNotesConfirm(out, model);
+
+  CHECK(drewText(out, "Errands"));
+  CHECK(drewText(out, "7 items. This cannot be undone."));
+
+  const fui::DeviceContext ctx = device();
+  const fui::ActionEvent primary = out.tap(ctx.width / 2, ctx.height - toybox::kMargin - toybox::kPillHeight / 2);
+  CHECK(primary.action == notesui::ActionDeleteCancel);
+  CHECK(out.has(notesui::ActionDeleteConfirm));
 }
 
 // An empty queue still has to offer the door. It is the one moment a reader
@@ -13107,6 +13319,14 @@ int main() {
   testTheFingerprintReadsTheStyleAndNotJustTheTarget();
   testADocumentEndingInANewlineIsStillWrappedOnce();
   testTheHackerNewsReaderAlsoWrapsOncePerDocument();
+  testTheEmptyNoteListStillOffersNewNote();
+  testTappingANoteRowOpensThatNote();
+  testTappingAChecklistRowTicksItRatherThanOpeningIt();
+  testEditModeSaysSoAndRetargetsTheSameRow();
+  testAChecklistTapReportsTheItemAndNotTheRow();
+  testAFullChecklistPageFitsAboveTheFooterAndRegistersEveryRow();
+  testBothNoteKindsAreOfferedAndLive();
+  testDeleteConfirmMakesKeepThePrimaryAnswer();
   testTheEmptyQueueStillOffersSync();
   testTappingAQueueRowOpensThatArticle();
   testTheQueueTitleWidthLeavesRoomForThePosition();

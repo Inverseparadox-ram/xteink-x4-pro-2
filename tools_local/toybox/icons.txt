@@ -412,3 +412,33 @@ wiki_contents = list
 # waited quietly until the first file that did. It is the only name the two
 # manifests have ever shared.
 tick = check
+
+# ---------------------------------------------------------------------------
+# NOTES, in APPS, and the two controls it draws.
+#
+# `list-checks` -- lines with ticks beside them. It has to separate from its
+# NEIGHBOURS rather than from the games: STUDY is letterforms, HACKER NEWS a
+# folded broadsheet, XKCD a stack of frames, GET BOOKS a shelf of spines,
+# INSTAPAPER a ribbon, WALLPAPERS a framed landscape, WIKIPEDIA a globe.
+# Nothing else in the folder is horizontal rules with marks on them, and the
+# mark says both halves of what the app is -- a list, and things you tick.
+#
+# It is all single strokes, which is what survives 32px in one bit: rendered
+# and looked at, not assumed. Rejected: `notebook-pen` and `notepad-text` (a
+# book, which is GET BOOKS' territory, plus a second object inside the same
+# 32px box -- the interior detail that turned gamepad-2 to mush), `sticky-note`
+# (a plain square with a folded corner reads as a generic card, and says
+# nothing about ticking), `square-check-big` (a tick in a box is the app's own
+# CONTROL, and a mark should not also be a piece -- the rule that kept the
+# skull off the dungeon).
+notes       = list-checks
+
+# The app's two in-app controls. In-app marks name their function directly the
+# way go_settings and wiki_back do, so the tool rule that governs SHELF marks
+# ("a pencil is a tool, not a game") does not apply to them.
+notes_edit  = pencil    # enters edit mode on a checklist, where a tap rewords
+                        # an item instead of ticking it
+notes_trash = trash-2   # the keyboard's header button: the one way to delete
+                        # anything in this app. Its own icon rather than
+                        # go_trash, which belongs to GO and would read as a
+                        # borrowed one the first time either app changed.
