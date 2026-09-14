@@ -1,0 +1,100 @@
+.pio
+.idea
+.DS_Store
+.vscode
+open-x4-sdk
+fs_
+fs_*/
+lib/EpdFont/fontsrc
+lib/I18n/I18nKeys.h
+lib/I18n/I18nStrings.h
+lib/I18n/I18nStrings.cpp
+*.generated.h
+.vs
+build
+**/__pycache__/
+/compile_commands.json
+/.cache
+.history/
+/.venv
+/.venv-study
+*.local*
+*.cpfont
+# ...except the browser demo's card, which is a shipped asset rather than a
+# build artifact, exactly like tools_local/wasm/sdcard/xkcd/images.dat next to
+# it. Without this a fresh worktree rebuilds the web card 1.3MB lighter and the
+# Study app draws no Chinese at all -- silently, because nothing fails.
+!tools_local/wasm/sdcard/study/fonts/KaiTi/*.cpfont
+lib/EpdFont/scripts/downloaded_fonts/
+lib/EpdFont/scripts/instanced_fonts/
+lib/EpdFont/scripts/output/
+# Claude Code: share project skills with the team, keep local agent state
+# (worktrees, scheduled-task locks, settings.local, scout CLEANUP.md) out.
+.claude/*
+!.claude/skills/
+/managed_components
+/.dummy
+/CMakeLists.txt
+/dependencies.lock
+/sdkconfig.*
+sdkconfig.sticky
+sdkconfig.x4pro
+
+# fork-local: simulator screenshots and logs (scripts_local/)
+qa-artifacts/
+# A screenshot dropped at the tree ROOT, which is what sim-shot.sh does when it
+# is given a bare filename instead of a path under qa-artifacts/. Anchored with
+# a leading slash so the 24 real .bmp files under site/wallpapers/starter stay
+# tracked. A 6MB why.bmp reached a commit this way.
+/*.bmp
+
+# The browser build's output is no longer committed on every rebuild, and the
+# history size is why: 111 revisions of site/emulator/crossplay.wasm, ~357MB of
+# blobs, 56 of those revisions in one week. The repository reached ~497MB on
+# GitHub for a ~104MB checkout and grew about 20MB a day, forever, paid for by
+# every clone and every CI checkout in the fork.
+#
+# Ignoring it outright is still not an option, and that is what this note used
+# to say: Vercel has no Emscripten, so a git-connected deploy that cannot see
+# these files ships a site whose headline feature 404s. So the bytes go to a
+# GitHub release instead and the repository keeps a ~1KB pointer:
+#
+#   tools_local/site/publish_emulator.py   uploads, and writes the manifest
+#   site/emulator-manifest.json            the pointer, committed per rebuild
+#   site/fetch-emulator.mjs                vercel.json's buildCommand, fetches
+#   .github/workflows/crossplay-site-live.yml   asks the live site if it worked
+#
+# The files under site/emulator/ ARE still tracked, frozen at the last revision
+# CI ever committed, and they are deliberately not ignored yet: they are the
+# fallback that keeps the demo up if the new path is not picked up, and an
+# ignore rule would be inert over tracked files anyway. Removing them from the
+# index is a separate change, to be made once a Vercel build log shows the
+# fetch running, and it is also where the history rewrite belongs.
+
+# Tool cache. It holds an account id and an email address and has no business
+# in a public repo.
+.cloudflare/
+.ruff_cache/
+
+# upstream (1.6.0rc): nix flake outputs
+flake.*
+
+# scratch for tools_local/trivia/rate_local.py: corpus, venv, per-model runs
+.rate/
+
+# scratch for tools_local/trivia/assemble_pack.py: corpus snapshot, built packs
+.pack/
+
+# scratch snapshots copied out of a live rating run; derived, large, not history
+.panel/
+wallpapers.dat
+# Wikipedia pack tool: fetched Vital Articles data, never committed
+tools_local/wikipedia/cache/
+
+# The Wikipedia page's mock pack: 12 MB of seeded noise that
+# site/wikipedia/mock/make_mock.py regenerates byte for byte. The manifest it
+# writes is committed; the data it names is not.
+site/wikipedia/mock/*.zst
+site/wikipedia/mock/*.idx
+site/wikipedia/mock/*.dir
+site/wikipedia/mock/shards/

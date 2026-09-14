@@ -1,0 +1,290 @@
+#include "OtaUpdater.h"
+
+// clang-format off
+// HttpDownloader.h pulls Arduino/SdFat, whose macros collide with lwip's
+// ip4_addr.h unless seen first. Pin this order; clang-format would otherwise sort
+// the local header last and break the build.
+#include "HttpDownloader.h"
+#include <Logging.h>
+#include <ReleaseJsonParser.h>
+#include <esp_ota_ops.h>
+#include <esp_wifi.h>
+// clang-format on
+
+#include <algorithm>
+#include <cstring>
+#include <string>
+
+#include "FirmwareBoardTag.h"
+#include "FirmwareFlasher.h"
+#include "ReleaseSources.h"
+
+namespace {
+// This fork's releases, not upstream's. Left pointing at CrossPoint, "check for
+// update" fetched their newest build and flashed it over the top: every app on
+// the shelf gone, and worse, a cross-chip flash. Upstream's gh_release targets
+// the X4 and X3, which are ESP32-C3; this fork's devices (X4 Pro, Sticky) are
+// S3. Upstream added a guard against exactly that (crosspoint-reader#2880),
+// which says how it ends without one.
+}  // namespace
+
+OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
+  LOG_DBG("OTA", "Checking for update (current: %s)", CROSSPOINT_VERSION);
+
+  // Stream the ~32KB release JSON straight into the parser as it arrives.
+  // Buffering the whole body in a std::string would add a growing allocation
+  // on top of the TLS session's heap during the fetch; with -fno-exceptions an
+  // OOM there aborts. fetchUrl handles the verified-https GET, redirects, and
+  // User-Agent (see HttpDownloader).
+  //
+  // Sources in order: the site, which counts the device and answers with
+  // GitHub's JSON verbatim, then GitHub itself when the site does not answer
+  // or answers nothing with a tag in it (ReleaseSources.h says why). One
+  // parser per attempt: a half-fed parser is not reset by feeding it more.
+  //
+  // FORK CHANGE: upstream suffixes the asset per board (firmware-x4pro.bin)
+  // because one release feeds many devices. This fork's x4pro asks for the
+  // literal "firmware.bin": every unit in the field since v1.0.0 asks for
+  // that name, and adopting the suffix would strand them -- their updater
+  // would keep finding firmware.bin (and flash it), while a suffixed build
+  // would stop finding anything the moment a release dropped the plain name.
+  // Boards added after that (sticky, ...) use the per-board suffix from day
+  // one; CROSSPOINT_RELEASE_ASSET in FirmwareBoardTag.h encodes both rules,
+  // and host-tests/release pins the workflow to whatever each device asks
+  // for.
+  bool fetched = false;
+  bool tagged = false;
+  bool hasFirmware = false;
+  std::string tag;
+  std::string firmwareUrl;
+  size_t firmwareSize = 0;
+  for (const char* source : release_sources::kUrls) {
+    ReleaseJsonParser parser;
+    parser.setFirmwareAssetName(CROSSPOINT_RELEASE_ASSET);
+    const bool ok = HttpDownloader::fetchUrl(source, [&parser](const uint8_t* data, size_t len) {
+      parser.feed(reinterpret_cast<const char*>(data), len);
+      return true;
+    });
+    if (!ok) {
+      LOG_INF("OTA", "Release check via %s failed; next source", source);
+      continue;
+    }
+    fetched = true;
+    LOG_DBG("OTA", "Parser results from %s: tag=%s firmware=%s", source, parser.foundTag() ? "yes" : "no",
+            parser.foundFirmware() ? "yes" : "no");
+    if (!parser.foundTag()) {
+      LOG_INF("OTA", "No tag_name from %s; next source", source);
+      continue;
+    }
+    tagged = true;
+    hasFirmware = parser.foundFirmware();
+    tag = parser.getTagName();
+    firmwareUrl = parser.getFirmwareUrl();
+    firmwareSize = parser.getFirmwareSize();
+    break;
+  }
+  if (!fetched) {
+    LOG_ERR("OTA", "Release check fetch failed");
+    return HTTP_ERROR;
+  }
+  if (!tagged) {
+    LOG_ERR("OTA", "No tag_name in release JSON");
+    return JSON_PARSE_ERROR;
+  }
+  if (!hasFirmware) {
+    LOG_INF("OTA", "No " CROSSPOINT_RELEASE_ASSET " asset in latest release");
+    return NO_UPDATE;
+  }
+
+  latestVersion = tag;
+  // Tags carry a v prefix ("v1.3.3"); CROSSPOINT_VERSION does not ("1.3.3").
+  // Comparing them raw meant isUpdateNewer()'s sscanf choked on the 'v' and
+  // compared uninitialized ints -- every install since v1.0.0 rode on that
+  // garbage reading as "newer", and a device already on the latest release
+  // was offered itself as an update. Found on hardware, naturally.
+  if (!latestVersion.empty() && (latestVersion[0] == 'v' || latestVersion[0] == 'V')) {
+    latestVersion.erase(0, 1);
+  }
+  otaUrl = firmwareUrl;
+  otaSize = firmwareSize;
+  totalSize = otaSize;
+  updateAvailable = true;
+
+  LOG_DBG("OTA", "Found update: tag=%s size=%zu", latestVersion.c_str(), otaSize);
+  LOG_DBG("OTA", "Firmware URL: %s", otaUrl.c_str());
+  return OK;
+}
+
+bool OtaUpdater::isUpdateNewer() const {
+  if (!updateAvailable || latestVersion.empty() || latestVersion == CROSSPOINT_VERSION) {
+    return false;
+  }
+
+  int currentMajor = 0, currentMinor = 0, currentPatch = 0;
+  int latestMajor = 0, latestMinor = 0, latestPatch = 0;
+
+  const auto currentVersion = CROSSPOINT_VERSION;
+
+  // semantic version check (only match on 3 segments). A tag that does not
+  // parse as three numbers is not an update this device can reason about, so
+  // it is refused rather than compared as garbage.
+  if (sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch) != 3) {
+    return false;
+  }
+  sscanf(currentVersion, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch);
+
+  /*
+   * Compare major versions.
+   * If they differ, return true if latest major version greater than current major version
+   * otherwise return false.
+   */
+  if (latestMajor != currentMajor) return latestMajor > currentMajor;
+
+  /*
+   * Compare minor versions.
+   * If they differ, return true if latest minor version greater than current minor version
+   * otherwise return false.
+   */
+  if (latestMinor != currentMinor) return latestMinor > currentMinor;
+
+  /*
+   * Check patch versions.
+   */
+  if (latestPatch != currentPatch) return latestPatch > currentPatch;
+
+  // If we reach here, it means all segments are equal.
+  // One final check, if we're on an RC build (contains "-rc"), we should consider the latest version as newer even if
+  // the segments are equal, since RC builds are pre-release versions.
+  if (strstr(currentVersion, "-rc") != nullptr) {
+    return true;
+  }
+
+  return false;
+}
+
+const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
+
+OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx) {
+  if (!isUpdateNewer()) {
+    return UPDATE_OLDER_ERROR;
+  }
+
+  // esp_https_ota is hardwired to esp-tls/mbedTLS, whose precompiled build on this
+  // package can't negotiate TLS 1.3 (see SecureClient.h). Drive the OTA partition
+  // ourselves and stream the firmware through HttpDownloader, which runs over
+  // wolfSSL when FREEINK_NET_WOLFSSL is set, reusing its redirect handling for the
+  // GitHub -> CDN hop.
+  const esp_partition_t* updatePartition = esp_ota_get_next_update_partition(nullptr);
+  if (!updatePartition) {
+    LOG_ERR("OTA", "No OTA partition available");
+    return INTERNAL_UPDATE_ERROR;
+  }
+
+  // A device keeps whatever partition table it was installed with: an OTA
+  // writes the app partition and otadata, never the table at 0x8000. Devices
+  // flashed before the spiffs partition was reclaimed still have 6.25MB slots
+  // while the release is built against 7.94MB ones, so an image can legitimately
+  // be too big for the device asking for it. Caught here, from the size the
+  // release already told us, rather than 6MB into a download that esp_ota_write
+  // would end with a generic write failure.
+  if (otaSize > 0 && otaSize > updatePartition->size) {
+    LOG_ERR("OTA", "image %zu > partition %zu on '%s': device needs a USB reflash to repartition", otaSize,
+            static_cast<size_t>(updatePartition->size), updatePartition->label);
+    return TOO_LARGE_ERROR;
+  }
+
+  esp_ota_handle_t otaHandle = 0;
+  esp_err_t esp_err = esp_ota_begin(updatePartition, OTA_SIZE_UNKNOWN, &otaHandle);
+  if (esp_err != ESP_OK) {
+    LOG_ERR("OTA", "esp_ota_begin failed: %s", esp_err_to_name(esp_err));
+    return INTERNAL_UPDATE_ERROR;
+  }
+
+  /* For better timing and connectivity, we disable power saving for WiFi */
+  esp_wifi_set_ps(WIFI_PS_NONE);
+
+  processedSize = 0;
+  int lastReportedPct = -1;
+  bool flashOk = true;
+  // The image streams in chunks; only the first bytes carry the header. Buffer
+  // the first 14 bytes so we can read chip_id (esp_image_header_t offset 12)
+  // and reject a wrong-MCU image before it overwrites the OTA partition.
+  uint8_t hdr[14];
+  size_t hdrLen = 0;
+  bool wrongChip = false;
+  // All S3 boards share a chip_id, so also scan the stream for the embedded
+  // board tag (FirmwareBoardTag.h). An untagged image passes; a tag naming a
+  // different board aborts the download. The wrong image may partially land in
+  // the inactive OTA slot, but esp_ota_abort() below means it never becomes
+  // the boot target.
+  board_tag::Scanner tagScanner;
+  const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t len) {
+    if (hdrLen < sizeof(hdr)) {
+      const size_t take = std::min(len, sizeof(hdr) - hdrLen);
+      std::memcpy(hdr + hdrLen, data, take);
+      hdrLen += take;
+      if (hdrLen == sizeof(hdr)) {
+        uint16_t imageChip;
+        std::memcpy(&imageChip, hdr + 12, sizeof(imageChip));
+        const uint16_t deviceChip = firmware_flash::runningPartitionChipId();
+        if (deviceChip != 0xFFFF && imageChip != deviceChip) {
+          LOG_ERR("OTA", "wrong chip: image=0x%04X device=0x%04X", imageChip, deviceChip);
+          wrongChip = true;
+          return false;  // abort the transfer
+        }
+      }
+    }
+    tagScanner.feed(data, len);
+    if (tagScanner.mismatch()) {
+      LOG_ERR("OTA", "wrong board: image=%s device=%.*s", tagScanner.foundName(),
+              static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
+      return false;  // abort the transfer
+    }
+    if (esp_ota_write(otaHandle, data, len) != ESP_OK) {
+      flashOk = false;
+      return false;  // abort the transfer
+    }
+    processedSize += len;
+    // Fire the callback only on whole-percent change. Per-chunk updates wake the
+    // render task, whose framebuffer work contends with TLS on the internal arena,
+    // and e-ink can't repaint faster than a percent tick anyway.
+    if (onProgress && totalSize > 0) {
+      const int pct = static_cast<int>(static_cast<uint64_t>(processedSize) * 100 / totalSize);
+      if (pct != lastReportedPct) {
+        lastReportedPct = pct;
+        onProgress(ctx);
+      }
+    }
+    return true;
+  });
+
+  /* Return back to default power saving for WiFi in case of failing */
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+
+  if (wrongChip || tagScanner.mismatch()) {
+    LOG_ERR("OTA", "Firmware install aborted: wrong device");
+    esp_ota_abort(otaHandle);
+    return WRONG_DEVICE_ERROR;
+  }
+
+  if (!fetchOk || !flashOk) {
+    LOG_ERR("OTA", "Firmware install failed (%s)", flashOk ? "download" : "flash write");
+    esp_ota_abort(otaHandle);
+    return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;
+  }
+
+  esp_err = esp_ota_end(otaHandle);  // verifies the written image
+  if (esp_err != ESP_OK) {
+    LOG_ERR("OTA", "esp_ota_end failed: %s", esp_err_to_name(esp_err));
+    return INTERNAL_UPDATE_ERROR;
+  }
+
+  esp_err = esp_ota_set_boot_partition(updatePartition);
+  if (esp_err != ESP_OK) {
+    LOG_ERR("OTA", "esp_ota_set_boot_partition failed: %s", esp_err_to_name(esp_err));
+    return INTERNAL_UPDATE_ERROR;
+  }
+
+  LOG_INF("OTA", "Update completed");
+  return OK;
+}
