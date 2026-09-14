@@ -18,6 +18,7 @@ upstream's and covers the reader, not these.
 | --- | --- |
 | [`study.md`](study.md) | Anki decks on the reader: the deck, the scheduler, and what a review does. |
 | [`instapaper.md`](instapaper.md) | The read-later queue and how it syncs. |
+| [`weather.md`](weather.md) | The forecast: where the numbers come from, and why absence is not zero. |
 | [`trivia.md`](trivia.md) | The question app, and where the questions come from. |
 
 ## The rules a game implements

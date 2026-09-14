@@ -39,6 +39,7 @@
 #include "trivia/TriviaActivity.h"
 #include "ui/ToyboxIcons.h"
 #include "wallpapers/WallpapersActivity.h"
+#include "weather/WeatherActivity.h"
 #include "wavelength/WavelengthActivity.h"
 #include "wikipedia/WikipediaActivity.h"
 #include "xkcd/XkcdActivity.h"
@@ -77,6 +78,7 @@ constexpr shelf::Item kApps[] = {
     {"HACKER NEWS", &icon_hackernews_32, &HackerNewsActivity::create},
     {"XKCD", &icon_xkcd_32, &XkcdActivity::create},
     {"NOTES", &icon_notes_32, &NotesActivity::create},
+    {"WEATHER", &icon_weather_32, &WeatherActivity::create},
     {"GET BOOKS", &icon_getbooks_32, &OpdsBookBrowserActivity::create},
     {"INSTAPAPER", &icon_instapaper_32, &InstapaperActivity::create},
     {"WALLPAPERS", &icon_wallpapers_32, &WallpapersActivity::create},

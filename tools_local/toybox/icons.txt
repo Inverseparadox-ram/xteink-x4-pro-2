@@ -442,3 +442,29 @@ notes_trash = trash-2   # the keyboard's header button: the one way to delete
                         # anything in this app. Its own icon rather than
                         # go_trash, which belongs to GO and would read as a
                         # borrowed one the first time either app changed.
+
+# ---------------------------------------------------------------------------
+# WEATHER, in APPS, and its two controls.
+#
+# `cloud-drizzle`, chosen by rendering the candidates at 32px in one bit rather
+# than by reading their names. `cloud-sun` is the obvious pick and it loses
+# here: the sun's rays cross the cloud's outline, so the silhouette breaks into
+# speckle -- the same interior-detail failure that ruled out gamepad-2. A plain
+# `cloud` survives that test and fails a different one: on a shelf of software
+# a bare cloud reads as storage. The drizzle mark keeps the clean cloud outline
+# AND puts three separated drops under it, which nothing else in APPS has:
+# STUDY is letterforms, HACKER NEWS a broadsheet, XKCD a stack of frames, NOTES
+# ruled lines with ticks, GET BOOKS a row of spines, INSTAPAPER a ribbon,
+# WALLPAPERS a framed landscape, WIKIPEDIA a globe.
+weather = cloud-drizzle
+
+# The app's controls. In-app marks name their function directly, the way
+# go_settings and wiki_back do.
+weather_refresh = refresh-cw  # the band button on all three forecast views,
+                              # and the only control in the app that spends a
+                              # network round trip
+weather_remove  = trash-2     # enters the places list's remove mode
+weather_done    = check       # leaves it. A 32px cut of the same glyph
+                              # `tick` carries at 24px, which is the size the
+                              # shelf chooser draws and the only one that
+                              # existed until this app needed a band button.

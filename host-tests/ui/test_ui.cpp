@@ -27,6 +27,7 @@
 #include "../../src/apps_local/insider/InsiderScreens.h"
 #include "../../src/apps_local/instapaper/InstapaperScreens.h"
 #include "../../src/apps_local/notes/NotesScreens.h"
+#include "../../src/apps_local/weather/WeatherScreens.h"
 #include "../../src/apps_local/jaipur/JaipurScreens.h"
 #include "../../src/apps_local/knucklebones/KnucklebonesScreens.h"
 #include "../../src/apps_local/link/LinkScreens.h"
@@ -8399,6 +8400,38 @@ void testTheForeheadResultsMarkTheUnansweredCardApart() {
 
 // --- Instapaper ------------------------------------------------------------
 
+void buildWeatherPlaces(Rendered& out, const weatherui::PlacesModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  weatherui::buildPlaces(screen, model);
+}
+
+void buildWeatherNow(Rendered& out, const weatherui::NowModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  weatherui::buildNow(screen, model);
+}
+
+void buildWeatherHours(Rendered& out, const weatherui::HoursModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  weatherui::buildHours(screen, model);
+}
+
+void buildWeatherWeek(Rendered& out, const weatherui::WeekModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  weatherui::buildWeek(screen, model);
+}
+
 void buildNotesList(Rendered& out, const notesui::ListModel& model) {
   const fui::DeviceContext ctx = device();
   const fui::InputSnapshot noInput{};
@@ -9129,6 +9162,147 @@ void testTheHackerNewsReaderAlsoWrapsOncePerDocument() {
           linesFromTextArea(slow, body, doc.c_str(), style, top));
   }
   CHECK(wrap.wraps() == 1);
+}
+
+// The view bar is the only way between the three forecast views, so all three
+// segments must be live on every one of them -- including the segment for the
+// view already on screen, which is a refresh of the same screen rather than a
+// dead control.
+void testEveryForecastViewOffersAllThreeSegments() {
+  const fui::DeviceContext ctx = device();
+  const int16_t barY = static_cast<int16_t>(ctx.height - toybox::kMargin - toybox::kPillHeight / 2);
+
+  {
+    Rendered out;
+    weatherui::NowModel model;
+    model.place = "Bengaluru";
+    model.temperature = "25 C";
+    buildWeatherNow(out, model);
+    CHECK(out.has(weatherui::ActionViewNow));
+    CHECK(out.has(weatherui::ActionViewHours));
+    CHECK(out.has(weatherui::ActionViewWeek));
+    // And the refresh control, which is the only thing in the app that spends
+    // a network round trip. It lives on the band, sharing pixels with nothing.
+    CHECK(out.has(weatherui::ActionRefresh));
+    CHECK(!out.interactions.overflowed());
+    CHECK(out.tap(ctx.width / 6, barY).action == weatherui::ActionViewNow);
+    CHECK(out.tap(ctx.width / 2, barY).action == weatherui::ActionViewHours);
+    CHECK(out.tap(ctx.width * 5 / 6, barY).action == weatherui::ActionViewWeek);
+  }
+  {
+    Rendered out;
+    const weatherui::HourRow rows[2] = {{"15:00", "24", "Showers", "85%", "18"},
+                                        {"16:00", "25", "Light rain", "60%", "16"}};
+    weatherui::HoursModel model;
+    model.place = "Bengaluru";
+    model.rows = rows;
+    model.count = 2;
+    buildWeatherHours(out, model);
+    CHECK(out.has(weatherui::ActionViewNow));
+    CHECK(out.has(weatherui::ActionViewWeek));
+    CHECK(out.has(weatherui::ActionRefresh));
+    CHECK(drewText(out, "Showers"));
+    // The column heading, without which the bare numbers under it are unitless.
+    CHECK(drewText(out, "CONDITIONS"));
+    CHECK(!out.interactions.overflowed());
+  }
+  {
+    Rendered out;
+    const weatherui::DayRow rows[2] = {{"MON 14 SEP", "Showers", "28 / 19", ", 85% chance", "06:09 - 18:22"},
+                                       {"TUE 15 SEP", "Rain", "27 / 20", ", 70% chance", "06:09 - 18:21"}};
+    weatherui::WeekModel model;
+    model.place = "Bengaluru";
+    model.rows = rows;
+    model.count = 2;
+    buildWeatherWeek(out, model);
+    CHECK(out.has(weatherui::ActionViewNow));
+    CHECK(out.has(weatherui::ActionViewHours));
+    CHECK(drewText(out, "MON 14 SEP"));
+    CHECK(drewText(out, "28 / 19"));
+    CHECK(!out.interactions.overflowed());
+  }
+}
+
+// The whole point of the NOW table: a field the model did not report draws
+// NOTHING. A build that rendered absence as 0 would look entirely plausible --
+// 0% humidity, 0 hPa, 0 km visibility are all numbers -- which is why this is
+// asserted on the pixels rather than left to the parser's tests.
+void testAnUnreportedFieldIsNotDrawnAsZero() {
+  Rendered out;
+  const weatherui::Detail details[2] = {{"Humidity", "78%", "Humid"}, {"Wind", "14 km/h SSW", "Gentle breeze"}};
+  weatherui::NowModel model;
+  model.place = "Bengaluru";
+  model.headline = "Slight rain showers";
+  model.temperature = "25 C";
+  model.details = details;
+  model.detailCount = 2;
+  buildWeatherNow(out, model);
+
+  CHECK(drewText(out, "Humidity"));
+  CHECK(drewText(out, "78%"));
+  // The plain-words note, which is the difference between a readout and a
+  // description, and the column the layout twice tried to elide away.
+  CHECK(drewText(out, "Gentle breeze"));
+  CHECK(drewText(out, "14 km/h SSW"));
+  // Visibility was never handed in, so nothing about it is on the screen.
+  CHECK(!drewText(out, "Visibility"));
+  CHECK(!drewText(out, "0 km"));
+}
+
+// Removing a place is the one destructive thing here, so a row must mean
+// "open" until an explicit mode says otherwise -- and the band must say which
+// mode it is in, or the two screens are identical while a tap does different
+// things.
+void testPlacesRowsOpenUntilRemoveModeSaysOtherwise() {
+  fui::ListItem rows[2];
+  const char* names[2] = {"Bengaluru", "Reykjavik"};
+  for (int i = 0; i < 2; ++i) {
+    rows[i] = fui::ListItem{};
+    rows[i].label = names[i];
+    rows[i].subtitle = "Somewhere";
+    rows[i].actionValue = static_cast<int16_t>(i);
+  }
+  const fui::Rect band = weatherui::placesBand(device());
+
+  Rendered browsing;
+  weatherui::PlacesModel model;
+  model.items = rows;
+  model.count = 2;
+  buildWeatherPlaces(browsing, model);
+  const int16_t rowH = weatherui::placesRowHeight(browsing.target, toybox::themeTokens());
+  CHECK(drewText(browsing, "WEATHER"));
+  CHECK(browsing.tap(band.x + band.width / 2, band.y + rowH / 2).action == weatherui::ActionOpenPlace);
+  CHECK(browsing.has(weatherui::ActionAddPlace));
+  CHECK(browsing.has(weatherui::ActionEditPlaces));
+
+  Rendered removing;
+  model.editing = true;
+  buildWeatherPlaces(removing, model);
+  CHECK(drewText(removing, "REMOVE WHICH?"));
+  CHECK(!drewText(removing, "WEATHER"));
+  const fui::ActionEvent tapped = removing.tap(band.x + band.width / 2, band.y + rowH / 2);
+  CHECK(tapped.action == weatherui::ActionRemovePlace);
+  CHECK(tapped.value == 0);
+  // No way to add a place from inside the remove mode: the footer is the way
+  // out of it instead.
+  CHECK(!removing.has(weatherui::ActionAddPlace));
+}
+
+// An empty shelf offers the door, and says where the files go -- a user who
+// cannot find the exports is in the same position as one who has none.
+void testTheEmptyPlacesListStillOffersAddAndNamesTheCard() {
+  Rendered out;
+  const weatherui::PlacesModel model;
+  buildWeatherPlaces(out, model);
+  CHECK(drewText(out, "NO PLACES YET"));
+  CHECK(drewText(out, "/Weather"));
+  CHECK(drewText(out, "Open-Meteo"));
+  const fui::DeviceContext ctx = device();
+  CHECK(out.tap(ctx.width / 2, ctx.height - toybox::kMargin - toybox::kPillHeight / 2).action ==
+        weatherui::ActionAddPlace);
+  // Nothing to remove, so the mode is not offered: a control that leads to an
+  // empty list is a control that does nothing.
+  CHECK(!out.has(weatherui::ActionEditPlaces));
 }
 
 // An empty shelf still has to offer the door, for the same reason the empty
@@ -13319,6 +13493,10 @@ int main() {
   testTheFingerprintReadsTheStyleAndNotJustTheTarget();
   testADocumentEndingInANewlineIsStillWrappedOnce();
   testTheHackerNewsReaderAlsoWrapsOncePerDocument();
+  testEveryForecastViewOffersAllThreeSegments();
+  testAnUnreportedFieldIsNotDrawnAsZero();
+  testPlacesRowsOpenUntilRemoveModeSaysOtherwise();
+  testTheEmptyPlacesListStillOffersAddAndNamesTheCard();
   testTheEmptyNoteListStillOffersNewNote();
   testTappingANoteRowOpensThatNote();
   testTappingAChecklistRowTicksItRatherThanOpeningIt();

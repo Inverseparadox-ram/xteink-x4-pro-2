@@ -49,6 +49,7 @@ mkdir -p "$BUILD_DIR"
   ../../src/apps_local/hackernews/HackerNewsScreens.cpp \
   ../../src/apps_local/instapaper/InstapaperScreens.cpp \
   ../../src/apps_local/notes/NotesScreens.cpp \
+  ../../src/apps_local/weather/WeatherScreens.cpp \
   ../../src/apps_local/insider/InsiderCore.cpp \
   ../../src/apps_local/insider/InsiderScreens.cpp \
   ../../src/apps_local/knucklebones/KnucklebonesScreens.cpp \
