@@ -9184,20 +9184,19 @@ void testEveryRemoteControlIsLive() {
   model.connected = true;
   model.forwardSeconds = "10";
   model.backSeconds = "5";
-  model.volume = 8;
-  model.volumeMax = 16;
   model.profileName = "YOUTUBE";
   buildTheRemote(out, model);
 
   CHECK(out.has(remoteui::ActionPlayPause));
   CHECK(out.has(remoteui::ActionNext));
   CHECK(out.has(remoteui::ActionPrevious));
-  CHECK(out.has(remoteui::ActionPlay));
-  CHECK(out.has(remoteui::ActionPause));
-  CHECK(out.has(remoteui::ActionStop));
+  CHECK(out.has(remoteui::ActionSiri));
+  CHECK(out.has(remoteui::ActionClaude));
+  CHECK(out.has(remoteui::ActionDnd));
   CHECK(out.has(remoteui::ActionForward));
   CHECK(out.has(remoteui::ActionBack));
-  CHECK(out.has(remoteui::ActionVolume));
+  CHECK(out.has(remoteui::ActionVolumeUp));
+  CHECK(out.has(remoteui::ActionVolumeDown));
   CHECK(out.has(remoteui::ActionMute));
   CHECK(out.has(remoteui::ActionProfile));
   CHECK(out.has(remoteui::ActionForget));
@@ -9207,7 +9206,7 @@ void testEveryRemoteControlIsLive() {
   // and every one of them was a picture's job -- this is the check that keeps
   // them off, because a label creeping back is invisible in a diff and obvious
   // on the device.
-  for (const char* word : {"PLAY/PAUSE", "VOLUME", "MUTE", "FWD", "PREV", "NEXT", "STOP", "PAUSE"}) {
+  for (const char* word : {"PLAY/PAUSE", "VOLUME", "MUTE", "FWD", "PREV", "NEXT", "SIRI", "CLAUDE", "DND", "FOCUS"}) {
     CHECK(!drewText(out, word));
   }
 
@@ -9216,6 +9215,38 @@ void testEveryRemoteControlIsLive() {
   CHECK(drewText(out, "10"));
   CHECK(drewText(out, "5"));
   CHECK(drewText(out, "YOUTUBE"));
+}
+
+// Registered is not the same as reachable. Every control on this panel has to
+// WIN the hit test at its own centre, which is a different question from
+// whether it is in the table at all: the volume slider this row replaced was
+// registered with a 44px minimum touch rect that the mute button then had to
+// out-rank, and a control the router hands to its neighbour is a button that
+// does nothing for a reason no screenshot shows.
+void testEveryRemoteControlWinsItsOwnCentre() {
+  Rendered out;
+  remoteui::RemoteModel model;
+  model.connected = true;
+  model.profileName = "SCRUB";
+  buildTheRemote(out, model);
+
+  for (const fui::ActionId action :
+       {remoteui::ActionPlayPause, remoteui::ActionNext, remoteui::ActionPrevious, remoteui::ActionSiri,
+        remoteui::ActionClaude, remoteui::ActionDnd, remoteui::ActionForward, remoteui::ActionBack,
+        remoteui::ActionVolumeUp, remoteui::ActionVolumeDown, remoteui::ActionMute, remoteui::ActionProfile}) {
+    fui::Rect rect{};
+    bool found = false;
+    for (size_t i = 0; i < out.interactions.count(); ++i) {
+      if (out.interactions.data()[i].action == action) {
+        rect = out.interactions.data()[i].rect;
+        found = true;
+      }
+    }
+    CHECK(found);
+    if (!found) continue;
+    const fui::ActionEvent hit = out.tap(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    CHECK(hit.action == action);
+  }
 }
 
 // A profile that cannot promise a number must print none: under a blind scrub
@@ -9252,6 +9283,9 @@ void testThePairingSentenceAppearsOnlyWhenItIsNeeded() {
   // The controls are still there while unpaired: they are what the screen is,
   // and hiding them would make pairing feel like a different app.
   CHECK(waiting.has(remoteui::ActionPlayPause));
+  // And they are still reachable in the tighter layout the hint leaves behind,
+  // which is the row most likely to be squeezed into its neighbour.
+  CHECK(waiting.has(remoteui::ActionMute));
 
   Rendered live;
   model.connected = true;
@@ -13591,6 +13625,7 @@ int main() {
   testADocumentEndingInANewlineIsStillWrappedOnce();
   testTheHackerNewsReaderAlsoWrapsOncePerDocument();
   testEveryRemoteControlIsLive();
+  testEveryRemoteControlWinsItsOwnCentre();
   testSeekNumbersAppearOnlyWhereTheProfileKeepsThem();
   testThePairingSentenceAppearsOnlyWhenItIsNeeded();
   testEveryForecastViewOffersAllThreeSegments();

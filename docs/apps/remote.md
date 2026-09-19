@@ -38,19 +38,16 @@ the track, the artist, the volume, or whether anything is playing.
 
 So no screen here shows a state it cannot know:
 
-- **PLAY and PAUSE are separate buttons**, beside the PLAY/PAUSE toggle. The
-  toggle is what macOS honours most reliably, but it is a toggle: when the
-  remote and the Mac disagree about what is playing -- which they always might
-  -- only a button that means one thing gets you out.
-- **The volume slider is relative.** HID sends volume *steps*, not
-  levels, and cannot read one back. macOS moves in sixteenths, so the slider
-  has seventeen positions and a drag from a to b sends |b-a| presses -- exact,
-  as long as the volume is only ever changed from here. Dragging to either end
-  sends a full sixteen, which is the one move that lands on a level both sides
-  agree about after the Mac has been touched directly.
-  The slider's own knob is the only readout; there is no caption, because a
-  number beside it would read as the Mac's volume, which is a thing this app
-  has no way to know.
+- **Volume is two buttons, not a slider.** HID sends volume *steps*, not
+  levels, and cannot read one back, so a slider drew a position the remote had
+  guessed at -- and the guess was wrong the moment anyone touched the volume on
+  the Mac. Two buttons claim nothing: one tap is one step, which is exactly
+  what goes over the wire. The side keys do the same thing without looking at
+  the panel.
+- **The mute button remembers only what it sent.** It cannot read the Mac's
+  mute, so the filled band means "this remote sent a mute", not "the Mac is
+  muted". A volume step clears it, because a volume key unmutes on the host
+  too.
 
 **There is no now-playing display, and there cannot be one over BLE from a
 Mac.** iOS publishes AMS (Apple Media Service), a BLE service that would answer
@@ -76,12 +73,47 @@ long as the host feels like would be lying.
 | `PLAYER KEYS` | `→` | `←` | the arrows alone -- the player sets the jump |
 | `SCRUB` | hold Fast Forward | hold Rewind | the arrows alone -- the host sets the distance |
 
+## The three shortcut buttons
+
+The third row is a microphone, Claude's mark and a crescent moon. None of the
+three is a media key -- HID has no usage for Siri, for launching an
+application, or for Do Not Disturb -- so each one types a keyboard shortcut,
+the same way the seek buttons do.
+
+| Button | Sends | Needs setting up? |
+| --- | --- | --- |
+| Siri | `⌘Space` **held** for 1.2s | No, if Siri's shortcut is "Hold ⌘ Space" (System Settings → Apple Intelligence & Siri) |
+| Claude | `⌘Space` tapped, then types `claude`, then Return | No -- that is Spotlight, and it is stock |
+| Do Not Disturb | `⌃⌥⌘D` | **Yes**, once. See below |
+
+**Siri and Claude ride the same chord.** macOS itself separates Siri from
+Spotlight by whether ⌘Space is *held* or *tapped*, so this remote does too --
+which is why neither button needs anything configured that a Mac does not
+already have. `host-tests/remote` asserts the two stay on one chord.
+
+**Do Not Disturb has no default shortcut anywhere in macOS**, so `⌃⌥⌘D` does
+nothing until it is bound once:
+
+> Shortcuts app → **+** → search "Set Focus" → set it to *Do Not Disturb,
+> Toggle* → rename the shortcut → **ⓘ** → *Add Keyboard Shortcut* → press
+> ⌃⌥⌘D.
+
+That chord was picked because nothing in macOS or the common applications
+claims it, so binding it takes nothing away. The remote has no way to tell
+whether you have bound it -- nothing comes back -- so a Do Not Disturb button
+that appears to do nothing means the binding is missing.
+
+This row replaced explicit PLAY, PAUSE and STOP buttons. Those were the
+transport toggle spelled out three times; the toggle above is what macOS
+honours most reliably anyway, so they cost a third of the panel and added one
+control it did not already give.
+
 ## The screen is marks, not words
 
 Every control is an icon: 64px prev / play-pause / next across the top, the two
-circular seek arrows, then play, pause and stop at 40px, then a speaker mark,
-the slider and a mute mark. Three pieces of text survive the whole panel, and
-each one is there because no drawing does its job:
+circular seek arrows, then the three shortcuts at 40px, then a speaker mark
+with volume down, volume up and mute. Three pieces of text survive the whole
+panel, and each one is there because no drawing does its job:
 
 - the **two seek numbers**, under the one profile that defines them;
 - the **profile name** in the footer, because no mark distinguishes YouTube
@@ -92,9 +124,30 @@ each one is there because no drawing does its job:
   bluetooth glyph -- the live controls under it are the rest of the message.
 
 `host-tests/ui` asserts the absence directly: it renders the panel and fails if
-`PLAY/PAUSE`, `VOLUME`, `MUTE`, `FWD`, `PREV`, `NEXT`, `STOP` or `PAUSE` ever
-reach it as text. A label creeping back onto a button face is invisible in a
-diff and obvious on the device.
+`PLAY/PAUSE`, `VOLUME`, `MUTE`, `FWD`, `PREV`, `NEXT`, `SIRI`, `CLAUDE`, `DND`
+or `FOCUS` ever reach it as text. A label creeping back onto a button face is
+invisible in a diff and obvious on the device.
+
+It also taps the centre of every control and asserts that control wins the hit
+test. Registered and reachable are different questions: a button the router
+hands to its neighbour does nothing, for a reason no screenshot shows.
+
+## One report per key, and why the gap matters
+
+A key is held for **45ms** before its release report goes out, and 45ms passes
+before the next report.
+
+That number used to be 12ms, and it was a bug. A BLE notification only leaves
+the device when its connection interval comes round -- macOS negotiates 15-30ms
+-- so two notifications sent 12ms apart could land in the same interval, where
+the second `setValue()` overwrote the first before either was transmitted. The
+host then saw the release and never the press.
+
+The symptom picked on **mute** specifically, and that is the tell. A drag of
+the old volume slider fired sixteen reports, so enough survived for the volume
+to visibly move; play/pause was simply pressed again by anyone who thought they
+had missed. Mute is one tap carrying one report, and a lost report is a button
+that does nothing.
 
 ## The radio is up only while the app is open
 

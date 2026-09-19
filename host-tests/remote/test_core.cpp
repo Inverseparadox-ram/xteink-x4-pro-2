@@ -1,5 +1,5 @@
-// Freestanding tests for RemoteCore: the seek profiles and the volume
-// arithmetic.
+// Freestanding tests for RemoteCore: the seek profiles and the three Mac
+// shortcuts.
 //
 // The thing under test is HONESTY. This app cannot read anything back from the
 // host -- not the track, not the volume, not whether the music is playing --
@@ -69,29 +69,53 @@ static void testBrowserSeekTypesTheYouTubeKeys() {
   CHECK(remote::backChord(remote::Profile::MediaKey).key == 0, "in both directions");
 }
 
-static void testVolumeIsRelativeAndResyncsAtTheEnds() {
-  CHECK(remote::volumeStepsBetween(8, 11) == 3, "three notches up is three presses");
-  CHECK(remote::volumeStepsBetween(11, 8) == -3, "and three down is three the other way");
-  CHECK(remote::volumeStepsBetween(8, 8) == 0, "no move, no presses");
+// Siri and Claude ride the SAME chord, and only the hold tells them apart --
+// which is exactly how macOS itself separates Siri from Spotlight. If these
+// ever diverge, one of the two buttons is sending something a stock Mac has
+// never been told about.
+static void testSiriAndClaudeShareCommandSpace() {
+  const remote::KeyChord cmdSpace = remote::commandSpace();
+  CHECK(cmdSpace.key == 0x2C, "the key is Space, got 0x%02X", cmdSpace.key);
+  CHECK(cmdSpace.modifiers == 8, "with Command and nothing else, got %d", cmdSpace.modifiers);
 
-  // The ends are the resync. The remote's count is a guess the moment anyone
-  // touches the Mac's own volume, and only a full sixteen lands somewhere both
-  // sides agree about.
-  CHECK(remote::volumeStepsBetween(8, 0) == -remote::kVolumeSteps, "dragging to 0 sends a full sixteen down");
-  CHECK(remote::volumeStepsBetween(15, 16) == remote::kVolumeSteps, "and to the top, a full sixteen up");
-  CHECK(remote::volumeStepsBetween(0, 0) == -remote::kVolumeSteps, "even when it thinks it is already there");
+  // Long enough that macOS reads it as a hold rather than a Spotlight tap, and
+  // with margin for the BLE round trip at both ends.
+  CHECK(remote::kSiriHoldMs >= 1000, "the Siri hold clears macOS's own one second");
+}
 
-  CHECK(remote::clampVolume(-5) == 0, "clamped below");
-  CHECK(remote::clampVolume(999) == remote::kVolumeSteps, "clamped above");
-  // Sixteen, because that is how many steps macOS itself moves in: one notch
-  // here has to be one press there or a drag lands somewhere else.
-  CHECK(remote::kVolumeSteps == 16, "the slider matches macOS's own granularity");
+// Do Not Disturb is the one button with no stock shortcut behind it, so the
+// chord has to be one nothing else claims -- a user who binds it must not find
+// they have broken something they already had.
+static void testDoNotDisturbIsAChordNothingElseClaims() {
+  const remote::KeyChord dnd = remote::doNotDisturbChord();
+  CHECK(dnd.key == 0x07, "the key is D, got 0x%02X", dnd.key);
+  // Control + Option + Command, all three. Two-modifier chords are where
+  // macOS and the common applications put their own shortcuts.
+  CHECK(dnd.modifiers == (1 | 4 | 8), "Control-Option-Command, got %d", dnd.modifiers);
+
+  // And it must not collide with the one other chord this app sends.
+  const remote::KeyChord cmdSpace = remote::commandSpace();
+  CHECK(!(dnd.key == cmdSpace.key && dnd.modifiers == cmdSpace.modifiers), "the two chords are distinct");
+}
+
+// The Claude button types this into Spotlight, so it has to be typeable: the
+// keyboard report this app builds covers letters, digits and space, and
+// nothing else.
+static void testTheClaudeQueryIsTypeable() {
+  const char* query = remote::kClaudeQuery;
+  CHECK(query != nullptr && query[0] != '\0', "there is something to type");
+  for (const char* c = query; *c != '\0'; ++c) {
+    const bool typeable = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == ' ';
+    CHECK(typeable, "'%c' is a character the keyboard report can carry", *c);
+  }
 }
 
 int main() {
   testOnlyTheProfileThatKnowsTheNumbersPrintsThem();
   testBrowserSeekTypesTheYouTubeKeys();
-  testVolumeIsRelativeAndResyncsAtTheEnds();
+  testSiriAndClaudeShareCommandSpace();
+  testDoNotDisturbIsAChordNothingElseClaims();
+  testTheClaudeQueryIsTypeable();
   std::printf("%s  remote core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;
 }

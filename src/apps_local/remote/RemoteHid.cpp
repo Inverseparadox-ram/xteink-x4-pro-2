@@ -76,12 +76,6 @@ uint16_t usageFor(const Key key) {
   switch (key) {
     case Key::PlayPause:
       return 0x00CD;
-    case Key::Play:
-      return 0x00B0;
-    case Key::Pause:
-      return 0x00B1;
-    case Key::Stop:
-      return 0x00B7;
     case Key::Next:
       return 0x00B5;
     case Key::Previous:
@@ -130,6 +124,25 @@ bool notify(NimBLECharacteristic* characteristic, const uint8_t* data, const siz
   return true;
 }
 
+// How long a key is held before the release report goes out.
+//
+// THIS NUMBER IS THE MUTE BUG. It was 12ms, which is shorter than the BLE
+// connection interval macOS negotiates (typically 15-30ms), and a notify() only
+// leaves the device when its interval comes round. Two notifies inside one
+// interval means the second setValue() overwrites the first before either is
+// transmitted, so the host sees the release and never the press.
+//
+// That is why the symptom picked on Mute specifically. A drag of the volume
+// slider fired sixteen reports, so enough of them survived for the volume to
+// visibly move; play/pause was retried by anyone who thought they had missed.
+// Mute is one tap with one report, and a lost report is a button that does
+// nothing.
+//
+// 45ms clears the widest interval macOS uses with room to spare, and is still
+// shorter than a human notices between tapping a button and hearing the
+// result.
+constexpr uint32_t kKeyHoldMs = 45;
+
 // Press then release. A host that sees a press and never a release treats the
 // key as stuck, which on a volume key means the volume keeps moving.
 bool tapConsumer(const uint16_t usage) {
@@ -137,8 +150,32 @@ bool tapConsumer(const uint16_t usage) {
   const uint8_t press[2] = {static_cast<uint8_t>(usage & 0xFF), static_cast<uint8_t>(usage >> 8)};
   const uint8_t release[2] = {0, 0};
   if (!notify(consumerIn, press, sizeof(press))) return false;
-  delay(12);
+  delay(kKeyHoldMs);
   notify(consumerIn, release, sizeof(release));
+  // The gap matters as much as the hold: back-to-back taps race the same way a
+  // press and its own release did.
+  delay(kKeyHoldMs);
+  return true;
+}
+
+// US-layout HID keyboard usage for the characters Spotlight needs. Letters and
+// digits only -- the one string this app types is an application name.
+uint8_t keyboardUsageFor(const char c) {
+  if (c >= 'a' && c <= 'z') return static_cast<uint8_t>(0x04 + (c - 'a'));
+  if (c >= 'A' && c <= 'Z') return static_cast<uint8_t>(0x04 + (c - 'A'));
+  if (c >= '1' && c <= '9') return static_cast<uint8_t>(0x1E + (c - '1'));
+  if (c == '0') return 0x27;
+  if (c == ' ') return 0x2C;
+  return 0;
+}
+
+bool tapKeyboard(const uint8_t modifiers, const uint8_t key) {
+  uint8_t press[8] = {modifiers, 0, key, 0, 0, 0, 0, 0};
+  const uint8_t release[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  if (!notify(keyboardIn, press, sizeof(press))) return false;
+  delay(kKeyHoldMs);
+  notify(keyboardIn, release, sizeof(release));
+  delay(kKeyHoldMs);
   return true;
 }
 
@@ -209,13 +246,34 @@ bool send(const Key key) { return tapConsumer(usageFor(key)); }
 
 bool sendChord(const Chord& chord) {
   if (chord.key == 0) return false;
+  return tapKeyboard(chord.modifiers, chord.key);
+}
+
+bool holdChord(const Chord& chord, const uint32_t ms) {
+  if (chord.key == 0) return false;
   uint8_t press[8] = {chord.modifiers, 0, chord.key, 0, 0, 0, 0, 0};
   const uint8_t release[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   if (!notify(keyboardIn, press, sizeof(press))) return false;
-  delay(12);
+  delay(ms);
   notify(keyboardIn, release, sizeof(release));
+  delay(kKeyHoldMs);
   return true;
 }
+
+bool typeText(const char* text) {
+  if (text == nullptr) return false;
+  for (const char* c = text; *c != '\0'; ++c) {
+    const uint8_t usage = keyboardUsageFor(*c);
+    // A character with no usage is skipped rather than aborting: the caller is
+    // typing an application name, and a name that loses a stray character
+    // still lands on the right Spotlight hit.
+    if (usage == 0) continue;
+    if (!tapKeyboard(0, usage)) return false;
+  }
+  return true;
+}
+
+bool sendReturn() { return tapKeyboard(0, 0x28); }
 
 bool hold(const Key key, const uint32_t ms) {
   const uint16_t usage = usageFor(key);
@@ -225,6 +283,7 @@ bool hold(const Key key, const uint32_t ms) {
   if (!notify(consumerIn, press, sizeof(press))) return false;
   delay(ms);
   notify(consumerIn, release, sizeof(release));
+  delay(kKeyHoldMs);
   return true;
 }
 
@@ -245,6 +304,9 @@ Link link() { return Link::Advertising; }
 bool ready() { return false; }
 bool send(Key) { return false; }
 bool sendChord(const Chord&) { return false; }
+bool holdChord(const Chord&, uint32_t) { return false; }
+bool typeText(const char*) { return false; }
+bool sendReturn() { return false; }
 bool hold(Key, uint32_t) { return false; }
 void setBattery(uint8_t) {}
 void forgetPairings() {}

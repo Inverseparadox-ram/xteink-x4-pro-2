@@ -35,9 +35,6 @@ namespace remote {
 // in the .cpp so the screens never name a usage code.
 enum class Key : uint8_t {
   PlayPause,  // the toggle, and the one macOS honours most reliably
-  Play,
-  Pause,
-  Stop,
   Next,
   Previous,
   VolumeUp,
@@ -87,8 +84,22 @@ const char* deviceName();
 // swallowing.
 bool send(Key key);
 
-// Sends a keyboard chord the same way. Used for seek, which has no media key.
+// Sends a keyboard chord the same way. Used for seek and for the three
+// shortcut buttons, none of which has a media key.
 bool sendChord(const Chord& chord);
+
+// Holds a chord down for `ms`. macOS distinguishes Siri from Spotlight by how
+// long Command-Space is held, so the difference between the two is this call
+// and sendChord().
+bool holdChord(const Chord& chord, uint32_t ms);
+
+// Types `text` as keystrokes, US layout, letters and digits only. Used to
+// drive Spotlight, which is the one path to an application that needs no
+// shortcut set up on the Mac first.
+bool typeText(const char* text);
+
+// Taps Return.
+bool sendReturn();
 
 // Holds a media key down for `ms` and then releases it. Fast-forward and
 // rewind are press-and-hold scrub controls on the hosts that implement them at

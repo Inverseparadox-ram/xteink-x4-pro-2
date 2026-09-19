@@ -117,11 +117,14 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
   // footer -- on a screen whose every control is a touch target, empty space
   // is target that was not given to anything.
   const int16_t footerTop = static_cast<int16_t>(device.height - toybox::kMargin - kFooterHeight);
-  const int16_t avail = static_cast<int16_t>(footerTop - gutter * 2 - y);
-  const int16_t rowsHeight = static_cast<int16_t>(avail - gutter * 3);
-  // The transport is a third of it and the three rows under it share the
-  // rest: it holds the three controls a hand goes to without looking.
-  const int16_t transportH = static_cast<int16_t>(rowsHeight * 34 / 100);
+  // Exactly four gutters come out: three between the four rows and one above
+  // the footer. Counting them wrong is how a band of dead space appears under
+  // the last row, which on a panel of touch targets is target given to
+  // nothing.
+  const int16_t rowsHeight = static_cast<int16_t>(footerTop - y - gutter * 4);
+  // The transport takes a little under a third and the three rows under it
+  // share the rest: it holds the three controls a hand goes to without looking.
+  const int16_t transportH = static_cast<int16_t>(rowsHeight * 28 / 100);
   const int16_t rowH = static_cast<int16_t>((rowsHeight - transportH) / 3);
   const int16_t third = static_cast<int16_t>((width - 2 * gutter) / 3);
   iconButton(screen, fui::makeRect(toybox::kMargin, y, third, transportH), icon_rc_prev_64, 64, ActionPrevious, false);
@@ -147,48 +150,50 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
                   icon_rc_fwd_40, model.forwardSeconds, ActionForward);
   y = static_cast<int16_t>(y + rowH + gutter);
 
-  // --- Explicit play, pause, stop -----------------------------------------
-  // Kept, and now wordless. The toggle above is what macOS honours most
-  // reliably and is still a toggle; when the two ends disagree about what is
-  // playing -- which they always might, since nothing comes back -- only a
-  // control that means one thing gets you out.
+  // --- The three Mac shortcuts --------------------------------------------
+  // A microphone for Siri, Claude's mark, and the crescent macOS itself uses
+  // for Do Not Disturb. None of the three is a media key: each types a
+  // keyboard shortcut, which is the only thing a HID peripheral can do about
+  // an application or a system mode.
+  //
+  // This row replaced explicit PLAY, PAUSE and STOP. Those were the transport
+  // toggle spelled out three times, and the toggle above is what macOS honours
+  // most reliably anyway -- so they cost a third of the panel and added one
+  // control the toggle did not already give.
   const int16_t trio = static_cast<int16_t>((width - 2 * gutter) / 3);
-  iconButton(screen, fui::makeRect(toybox::kMargin, y, trio, rowH), icon_rc_play_40, 40, ActionPlay, false);
+  iconButton(screen, fui::makeRect(toybox::kMargin, y, trio, rowH), icon_rc_siri_40, 40, ActionSiri, false);
   iconButton(screen, fui::makeRect(static_cast<int16_t>(toybox::kMargin + trio + gutter), y, trio, rowH),
-             icon_rc_pause_40, 40, ActionPause, false);
+             icon_rc_claude_40, 40, ActionClaude, false);
   iconButton(screen,
              fui::makeRect(static_cast<int16_t>(toybox::kMargin + 2 * (trio + gutter)), y,
                            static_cast<int16_t>(width - 2 * (trio + gutter)), rowH),
-             icon_rc_stop_40, 40, ActionStop, false);
+             icon_rc_dnd_40, 40, ActionDnd, false);
   y = static_cast<int16_t>(y + rowH + gutter);
 
-  // --- Volume -------------------------------------------------------------
-  // The speaker mark replaces the "VOLUME 8 / 16" caption entirely. The
-  // slider's own knob says where the count is, and the caption was the text
-  // most obviously doing a picture's job.
+  // --- Volume: two buttons and a mute --------------------------------------
+  // A slider drew a position this app had guessed, and the guess was wrong the
+  // moment anyone touched the volume on the Mac -- HID sends steps and cannot
+  // read a level back. Two buttons claim nothing: one tap is one step, which
+  // is exactly what goes over the wire.
+  //
+  // The speaker mark stays as the row's label so a bare minus and plus are not
+  // left to say on their own which of several things they change.
   const int16_t markSize = 32;
-  const int16_t muteW = static_cast<int16_t>(rowH * 3 / 2);
-  const int16_t sliderW = static_cast<int16_t>(width - markSize - muteW - gutter * 2);
   screen.target().bitmap(
       fui::makeRect(toybox::kMargin, static_cast<int16_t>(y + (rowH - markSize) / 2), markSize, markSize),
       fui::bitmapFromIcon(icon_rc_vol_32), fui::BitmapMode::Contain, fui::Paint::solid(fui::Color::Black));
 
-  fui::SliderProps slider;
-  slider.value = model.volume;
-  slider.max = model.volumeMax;
-  slider.action = ActionVolume;
-  // Taller than the component's default: the one control here that is dragged
-  // rather than tapped, on a panel held at arm's length.
-  slider.knobHeight = 34;
-  slider.knobWidth = 18;
-  slider.trackHeight = 6;
-  fui::slider(screen.frame(),
-              fui::makeRect(static_cast<int16_t>(toybox::kMargin + markSize + gutter), y, sliderW, rowH), slider);
-
+  const int16_t volLeft = static_cast<int16_t>(toybox::kMargin + markSize + gutter);
+  const int16_t volWidth = static_cast<int16_t>(width - markSize - gutter);
+  const int16_t volThird = static_cast<int16_t>((volWidth - 2 * gutter) / 3);
+  iconButton(screen, fui::makeRect(volLeft, y, volThird, rowH), icon_rc_voldn_40, 40, ActionVolumeDown, false);
+  iconButton(screen, fui::makeRect(static_cast<int16_t>(volLeft + volThird + gutter), y, volThird, rowH),
+             icon_rc_volup_40, 40, ActionVolumeUp, false);
   // Filled while muted, so the button's own band carries the one piece of
   // state the remote is entitled to remember: that IT sent a mute.
   iconButton(screen,
-             fui::makeRect(static_cast<int16_t>(toybox::kMargin + markSize + sliderW + gutter * 2), y, muteW, rowH),
+             fui::makeRect(static_cast<int16_t>(volLeft + 2 * (volThird + gutter)), y,
+                           static_cast<int16_t>(volWidth - 2 * (volThird + gutter)), rowH),
              icon_rc_mute_32, 32, ActionMute, model.muted);
 
   // --- The profile, which is the only word left -------------------------

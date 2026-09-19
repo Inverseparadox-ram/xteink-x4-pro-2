@@ -1,6 +1,6 @@
 #pragma once
 
-// The remote's model: the seek profiles and the volume arithmetic.
+// The remote's model: the seek profiles and the three Mac shortcuts.
 //
 // Freestanding C++17 -- no NimBLE, no renderer, no Activity -- so
 // host-tests/remote builds it with a bare compiler. The radio lives in
@@ -18,23 +18,23 @@
 //    player's own shortcut and a profile says which player. A remote that
 //    promised "+10s" and sent a scrub would be lying on the button face.
 //
-// 2. THE VOLUME SLIDER IS RELATIVE, AND SAYS SO. HID sends volume UP and DOWN
-//    steps; it cannot set a level and cannot read one back. macOS moves in
-//    sixteenths, so the slider has seventeen positions and dragging from a to
-//    b sends |b-a| steps -- exact, as long as the volume is only changed from
-//    here. Change it on the Mac and this drifts, which is why dragging to
-//    either end sends a full sixteen steps: that is the one move that ends in
-//    a known state whatever the Mac was doing.
+// 2. VOLUME IS TWO BUTTONS, NOT A SLIDER. HID sends volume UP and DOWN steps;
+//    it cannot set a level and cannot read one back. A slider therefore drew a
+//    position the remote had guessed, and the guess was wrong the moment
+//    anyone touched the volume on the Mac. Two buttons claim nothing: each tap
+//    is one step, which is exactly what the wire carries.
+//
+// 3. THE THREE SHORTCUT BUTTONS TYPE WHAT A MAC ALREADY UNDERSTANDS. There is
+//    no HID usage for Siri, for launching an application, or for Do Not
+//    Disturb. Each of those is a keyboard shortcut on macOS, so each button
+//    sends that shortcut and the documentation says which. Two of the three
+//    work on a stock Mac; Do Not Disturb has no default shortcut anywhere in
+//    macOS, so that one has to be bound once. See docs/apps/remote.md.
 // ---------------------------------------------------------------------------
 
 #include <cstdint>
 
 namespace remote {
-
-// macOS volume is sixteen steps, so the slider is too: one notch here is one
-// press of the volume key there, and the two cannot disagree about how far a
-// drag went.
-inline constexpr int kVolumeSteps = 16;
 
 // How long fast-forward/rewind is held in the profile that uses them. Long
 // enough that a host implementing scrub actually moves, short enough that a
@@ -70,13 +70,28 @@ KeyChord backChord(Profile profile);
 const char* forwardSeconds(Profile profile);
 const char* backSeconds(Profile profile);
 
-// Clamps a slider position to 0..kVolumeSteps.
-int clampVolume(int position);
+// --- The three shortcut buttons ------------------------------------------
+//
+// Each is a chord the Mac already knows, or is told once.
 
-// How many volume-up (positive) or volume-down (negative) presses move the
-// host from `from` to `to`. Dragging to an end returns a full sixteen steps in
-// that direction regardless of where it thought it was -- that is the move
-// that resyncs a slider the Mac has drifted away from.
-int volumeStepsBetween(int from, int to);
+// How long Command-Space is held for Siri. macOS reads a HELD Command-Space as
+// Siri and a TAPPED one as Spotlight -- the same distinction the Mac's own
+// keyboard makes -- so this is the only thing separating the two buttons.
+// A second is what "Hold Command Space" means in System Settings; 1200ms
+// leaves margin for the BLE round trip at either end.
+inline constexpr uint32_t kSiriHoldMs = 1200;
+
+// Command-Space. Held it is Siri, tapped it is Spotlight.
+KeyChord commandSpace();
+
+// Control-Option-Command-D. macOS ships NO default shortcut for Do Not
+// Disturb, so this is a chord the user binds once (Shortcuts app -> Set Focus
+// -> add keyboard shortcut). Chosen because nothing in macOS or the common
+// applications claims it, so binding it breaks nothing.
+KeyChord doNotDisturbChord();
+
+// What the Claude button types into Spotlight after opening it. Spotlight is
+// the one route to an application that needs nothing set up on the Mac first.
+inline constexpr const char* kClaudeQuery = "claude";
 
 }  // namespace remote

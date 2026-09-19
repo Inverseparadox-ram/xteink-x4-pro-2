@@ -8,6 +8,13 @@ constexpr uint8_t kKeyL = 0x0F;
 constexpr uint8_t kKeyJ = 0x0D;
 constexpr uint8_t kKeyRight = 0x4F;
 constexpr uint8_t kKeyLeft = 0x50;
+constexpr uint8_t kKeySpace = 0x2C;
+constexpr uint8_t kKeyD = 0x07;
+
+// Modifier bits, mirrored from RemoteHid::Chord.
+constexpr uint8_t kModCtrl = 1;
+constexpr uint8_t kModAlt = 4;
+constexpr uint8_t kModCmd = 8;
 
 }  // namespace
 
@@ -63,21 +70,8 @@ const char* forwardSeconds(const Profile profile) {
 
 const char* backSeconds(const Profile profile) { return profile == Profile::Browser ? "5" : nullptr; }
 
-int clampVolume(const int position) {
-  if (position < 0) return 0;
-  if (position > kVolumeSteps) return kVolumeSteps;
-  return position;
-}
+KeyChord commandSpace() { return KeyChord{kModCmd, kKeySpace}; }
 
-int volumeStepsBetween(const int from, const int to) {
-  const int a = clampVolume(from);
-  const int b = clampVolume(to);
-  // An end stop resyncs. The remote's count is a guess the moment anyone
-  // touches the Mac's own volume, and sending a full sixteen at an end is the
-  // one move that lands on a level both sides agree about.
-  if (b == 0) return -kVolumeSteps;
-  if (b == kVolumeSteps) return kVolumeSteps;
-  return b - a;
-}
+KeyChord doNotDisturbChord() { return KeyChord{static_cast<uint8_t>(kModCtrl | kModAlt | kModCmd), kKeyD}; }
 
 }  // namespace remote

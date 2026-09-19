@@ -22,6 +22,12 @@ constexpr const char* kSettings = "/.crosspoint/remote/settings.txt";
 // How often the battery level is pushed to the host. Once a minute: it is the
 // one fact a HID peripheral can report back, and it changes slowly.
 constexpr uint32_t kBatteryIntervalMs = 60000;
+// How long Spotlight is given to open before the name is typed, and to search
+// before Return commits. Both are generous: the cost of being early is that
+// Return lands on the wrong application, and the cost of being late is a third
+// of a second.
+constexpr uint32_t kSpotlightOpenMs = 400;
+constexpr uint32_t kSpotlightSettleMs = 600;
 }  // namespace
 
 std::unique_ptr<Activity> RemoteActivity::create(GfxRenderer& renderer, MappedInputManager& mappedInput) {
@@ -38,19 +44,20 @@ void RemoteActivity::loadSettings() {
   file.close();
   if (n <= 0) return;
   int profile = 0;
-  int volume = remote::kVolumeSteps / 2;
-  if (std::sscanf(buffer, "profile=%d volume=%d", &profile, &volume) >= 1) {
+  // "profile=%d" and nothing else. Files written before the volume slider was
+  // removed carry a trailing "volume=N"; sscanf stops at the profile and the
+  // rest is ignored, so an old file still restores the one setting left.
+  if (std::sscanf(buffer, "profile=%d", &profile) == 1) {
     if (profile >= 0 && profile < static_cast<int>(remote::Profile::Count)) {
       profile_ = static_cast<remote::Profile>(profile);
     }
-    volume_ = remote::clampVolume(volume);
   }
 }
 
 void RemoteActivity::saveSettings() {
   Storage.ensureDirectoryExists(kDir);
   char text[64];
-  const int n = std::snprintf(text, sizeof(text), "profile=%d volume=%d\n", static_cast<int>(profile_), volume_);
+  const int n = std::snprintf(text, sizeof(text), "profile=%d\n", static_cast<int>(profile_));
   if (n <= 0) return;
   HalFile file;
   if (!Storage.openFileForWrite(kTag, kSettings, file)) return;
@@ -108,24 +115,54 @@ void RemoteActivity::seek(const bool forward) {
   requestUpdate();
 }
 
-void RemoteActivity::setVolume(const int position) {
-  const int target = remote::clampVolume(position);
-  const int steps = remote::volumeStepsBetween(volume_, target);
-  const remote::Key key = steps >= 0 ? remote::Key::VolumeUp : remote::Key::VolumeDown;
-  const int count = steps >= 0 ? steps : -steps;
-  for (int i = 0; i < count; ++i) {
-    if (!remote::send(key)) break;
-    // The host coalesces reports that arrive faster than it polls, so a burst
-    // sent flat out moves the volume by less than it was asked for.
-    delay(18);
+void RemoteActivity::volumeStep(const bool up) {
+  if (!remote::send(up ? remote::Key::VolumeUp : remote::Key::VolumeDown)) {
+    LOG_INF(kTag, "no subscribed host; volume step dropped");
+    return;
   }
-  {
+  // Moving the volume is an answer to "is it muted": it is not, any more. The
+  // Mac unmutes itself on a volume key, so the button follows it rather than
+  // keeping a mark the host has already cleared.
+  if (muted_) {
     RenderLock lock(*this);
-    volume_ = target;
-    // Moving the slider is an answer to "is it muted": it is not, any more.
-    if (count > 0) muted_ = false;
+    muted_ = false;
+    requestUpdate();
   }
-  saveSettings();
+}
+
+void RemoteActivity::toggleMute() {
+  if (!remote::send(remote::Key::Mute)) {
+    LOG_INF(kTag, "no subscribed host; mute dropped");
+    return;
+  }
+  RenderLock lock(*this);
+  // The remote cannot read the Mac's mute, so this tracks what IT sent. Mute
+  // is a toggle on the host too, so the two agree unless somebody mutes on the
+  // Mac directly.
+  muted_ = !muted_;
+  requestUpdate();
+}
+
+void RemoteActivity::openClaude() {
+  // Spotlight, because it is the only route to an application that needs
+  // nothing configured on the Mac first: tap Command-Space, type the name,
+  // press Return. A HELD Command-Space is Siri, which is why the two buttons
+  // differ only in how long the same chord is held.
+  const remote::KeyChord chord = remote::commandSpace();
+  remote::Chord out;
+  out.modifiers = chord.modifiers;
+  out.key = chord.key;
+  if (!remote::sendChord(out)) {
+    LOG_INF(kTag, "no subscribed host; Claude launch dropped");
+    return;
+  }
+  // Spotlight has to be on screen and focused before the name means anything.
+  delay(kSpotlightOpenMs);
+  remote::typeText(remote::kClaudeQuery);
+  // And it has to have finished searching, or Return commits against a stale
+  // top hit -- which on a Mac means opening whatever was there before.
+  delay(kSpotlightSettleMs);
+  remote::sendReturn();
   requestUpdate();
 }
 
@@ -168,11 +205,11 @@ void RemoteActivity::loop() {
   // The two side keys are volume, because that is the control people reach for
   // without looking at the panel and the only one worth a physical button.
   if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
-    setVolume(volume_ + 1);
+    volumeStep(true);
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-    setVolume(volume_ - 1);
+    volumeStep(false);
     return;
   }
 
@@ -197,35 +234,49 @@ void RemoteActivity::loop() {
     case remoteui::ActionPrevious:
       press(remote::Key::Previous);
       break;
-    case remoteui::ActionPlay:
-      press(remote::Key::Play);
+    case remoteui::ActionSiri: {
+      // The SAME chord the Claude button taps, held. That is how macOS itself
+      // tells Siri from Spotlight, and it is why neither button needs a
+      // setting: both ride a shortcut a stock Mac already has.
+      const remote::KeyChord chord = remote::commandSpace();
+      remote::Chord out;
+      out.modifiers = chord.modifiers;
+      out.key = chord.key;
+      remote::holdChord(out, remote::kSiriHoldMs);
+      requestUpdate();
       break;
-    case remoteui::ActionPause:
-      press(remote::Key::Pause);
+    }
+    case remoteui::ActionClaude:
+      openClaude();
       break;
-    case remoteui::ActionStop:
-      press(remote::Key::Stop);
+    case remoteui::ActionDnd: {
+      // No default shortcut exists for Do Not Disturb anywhere in macOS, so
+      // this chord does nothing until the user binds it once. Documented in
+      // docs/apps/remote.md; there is no way for the remote to tell whether
+      // they have, because nothing comes back.
+      const remote::KeyChord chord = remote::doNotDisturbChord();
+      remote::Chord out;
+      out.modifiers = chord.modifiers;
+      out.key = chord.key;
+      remote::sendChord(out);
+      requestUpdate();
       break;
+    }
     case remoteui::ActionForward:
       seek(true);
       break;
     case remoteui::ActionBack:
       seek(false);
       break;
-    case remoteui::ActionVolume:
-      // The slider reports the position it was dragged to.
-      setVolume(event.value);
+    case remoteui::ActionVolumeUp:
+      volumeStep(true);
       break;
-    case remoteui::ActionMute: {
-      remote::send(remote::Key::Mute);
-      RenderLock lock(*this);
-      // The remote cannot read the Mac's mute, so this tracks what IT sent and
-      // the button word follows that. Mute is a toggle on the host too, so the
-      // two agree unless somebody mutes on the Mac.
-      muted_ = !muted_;
-      requestUpdate();
+    case remoteui::ActionVolumeDown:
+      volumeStep(false);
       break;
-    }
+    case remoteui::ActionMute:
+      toggleMute();
+      break;
     case remoteui::ActionProfile:
       cycleProfile();
       break;
@@ -294,8 +345,6 @@ void RemoteActivity::render(RenderLock&&) {
     }
     model.forwardSeconds = remote::forwardSeconds(profile_);
     model.backSeconds = remote::backSeconds(profile_);
-    model.volume = volume_;
-    model.volumeMax = remote::kVolumeSteps;
     model.muted = muted_;
     model.profileName = remote::profileName(profile_);
     remoteui::buildRemote(screen, model);

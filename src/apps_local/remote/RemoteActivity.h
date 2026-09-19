@@ -38,7 +38,9 @@ class RemoteActivity final : public Activity {
 
   void press(remote::Key key);
   void seek(bool forward);
-  void setVolume(int position);
+  void volumeStep(bool up);
+  void toggleMute();
+  void openClaude();
   void cycleProfile();
 
   // The store is one line in a file; a whole PersistableStore for a single
@@ -47,7 +49,6 @@ class RemoteActivity final : public Activity {
   void saveSettings();
 
   remote::Profile profile_ = remote::Profile::Browser;
-  int volume_ = remote::kVolumeSteps / 2;
   bool muted_ = false;
   Phase phase_ = Phase::Remote;
 

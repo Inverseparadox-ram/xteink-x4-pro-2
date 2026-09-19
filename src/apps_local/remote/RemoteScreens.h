@@ -10,9 +10,8 @@
 // It never shows a state it cannot know. HID is one-way -- reports go out and
 // nothing comes back -- so this screen has no idea whether music is playing,
 // what the track is, or where the Mac's volume really sits. Every control is
-// therefore a VERB, not a state: PLAY and PAUSE are separate buttons rather
-// than one that claims to know which is needed, and the volume caption names
-// the remote's own count rather than the Mac's level.
+// therefore a VERB, not a state: volume is two buttons that each send one
+// step, rather than a slider drawing a position the remote had guessed at.
 //
 // The transport row is the exception that earns its size: PREV, PLAY/PAUSE and
 // NEXT are what a hand reaches for without looking, so they get the biggest
@@ -33,17 +32,18 @@ enum : fui::ActionId {
   ActionPlayPause = 380,
   ActionNext = 381,
   ActionPrevious = 382,
-  ActionPlay = 383,
-  ActionPause = 384,
-  ActionStop = 385,
+  ActionSiri = 383,
+  ActionClaude = 384,
+  ActionDnd = 385,
   ActionForward = 386,
   ActionBack = 387,
-  ActionVolume = 388,
+  ActionVolumeUp = 388,
   ActionMute = 389,
   ActionProfile = 390,
   ActionForget = 391,
   ActionForgetConfirm = 392,
   ActionForgetCancel = 393,
+  ActionVolumeDown = 394,
 };
 
 struct RemoteModel {
@@ -57,8 +57,9 @@ struct RemoteModel {
   const char* forwardSeconds = nullptr;
   const char* backSeconds = nullptr;
 
-  int volume = 0;
-  int volumeMax = 16;
+  // The one piece of state the remote is entitled to remember: that IT sent a
+  // mute. The button's own band carries it, and nothing else on screen claims
+  // to know the Mac's audio.
   bool muted = false;
 
   // One short word. No mark distinguishes YouTube from IINA from a blind
