@@ -31,6 +31,7 @@
 #include "notes/NotesActivity.h"
 #include "picross/PicrossActivity.h"
 #include "player/PlayerActivity.h"
+#include "remote/RemoteActivity.h"
 #include "seasalt/SeaSaltActivity.h"
 #include "solitaire/SolitaireActivity.h"
 #include "study/StudyActivity.h"
@@ -79,6 +80,7 @@ constexpr shelf::Item kApps[] = {
     {"XKCD", &icon_xkcd_32, &XkcdActivity::create},
     {"NOTES", &icon_notes_32, &NotesActivity::create},
     {"WEATHER", &icon_weather_32, &WeatherActivity::create},
+    {"REMOTE", &icon_remote_32, &RemoteActivity::create},
     {"GET BOOKS", &icon_getbooks_32, &OpdsBookBrowserActivity::create},
     {"INSTAPAPER", &icon_instapaper_32, &InstapaperActivity::create},
     {"WALLPAPERS", &icon_wallpapers_32, &WallpapersActivity::create},

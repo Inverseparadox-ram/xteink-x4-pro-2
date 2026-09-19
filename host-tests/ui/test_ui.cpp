@@ -28,6 +28,7 @@
 #include "../../src/apps_local/instapaper/InstapaperScreens.h"
 #include "../../src/apps_local/notes/NotesScreens.h"
 #include "../../src/apps_local/weather/WeatherScreens.h"
+#include "../../src/apps_local/remote/RemoteScreens.h"
 #include "../../src/apps_local/jaipur/JaipurScreens.h"
 #include "../../src/apps_local/knucklebones/KnucklebonesScreens.h"
 #include "../../src/apps_local/link/LinkScreens.h"
@@ -8400,6 +8401,14 @@ void testTheForeheadResultsMarkTheUnansweredCardApart() {
 
 // --- Instapaper ------------------------------------------------------------
 
+void buildTheRemote(Rendered& out, const remoteui::RemoteModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  remoteui::buildRemote(screen, model);
+}
+
 void buildWeatherPlaces(Rendered& out, const weatherui::PlacesModel& model) {
   const fui::DeviceContext ctx = device();
   const fui::InputSnapshot noInput{};
@@ -9162,6 +9171,72 @@ void testTheHackerNewsReaderAlsoWrapsOncePerDocument() {
           linesFromTextArea(slow, body, doc.c_str(), style, top));
   }
   CHECK(wrap.wraps() == 1);
+}
+
+// Every control the remote claims to have is actually registered. This is the
+// app where that matters most: it can read nothing back, so a control that
+// draws and registers nothing looks exactly like one whose key press the Mac
+// ignored, and the user would blame Bluetooth for a missing hit rect.
+void testEveryRemoteControlIsLive() {
+  Rendered out;
+  remoteui::RemoteModel model;
+  model.linkLabel = "CONNECTED";
+  model.connected = true;
+  model.forwardLabel = "+10s";
+  model.backLabel = "-5s";
+  model.volumeCaption = "VOLUME 8 / 16";
+  model.volume = 8;
+  model.volumeMax = 16;
+  model.profileName = "YOUTUBE / BROWSER";
+  model.profileNote = "Types L and left-arrow: 10s and 5s in YouTube.";
+  buildTheRemote(out, model);
+
+  CHECK(out.has(remoteui::ActionPlayPause));
+  CHECK(out.has(remoteui::ActionNext));
+  CHECK(out.has(remoteui::ActionPrevious));
+  CHECK(out.has(remoteui::ActionPlay));
+  CHECK(out.has(remoteui::ActionPause));
+  CHECK(out.has(remoteui::ActionStop));
+  CHECK(out.has(remoteui::ActionForward));
+  CHECK(out.has(remoteui::ActionBack));
+  CHECK(out.has(remoteui::ActionVolume));
+  CHECK(out.has(remoteui::ActionMute));
+  CHECK(out.has(remoteui::ActionProfile));
+  CHECK(out.has(remoteui::ActionForget));
+  CHECK(!out.interactions.overflowed());
+
+  // The labels are the app's only way of telling the truth about what a button
+  // does, so they have to reach the panel intact.
+  CHECK(drewText(out, "PLAY/PAUSE"));
+  CHECK(drewText(out, "+10s"));
+  CHECK(drewText(out, "-5s"));
+  CHECK(drewText(out, "VOLUME 8 / 16"));
+}
+
+// Connected and not connected are different screens, and the difference is the
+// sentence that says how to pair. A remote that is merely "not connected"
+// tells nobody what to do next.
+void testThePairingSentenceAppearsOnlyWhenItIsNeeded() {
+  Rendered waiting;
+  remoteui::RemoteModel model;
+  model.linkLabel = "PAIR ME";
+  model.pairingHint = "On the Mac: System Settings > Bluetooth, then pick it.";
+  model.connected = false;
+  model.volumeCaption = "VOLUME 8 / 16";
+  model.profileName = "YOUTUBE / BROWSER";
+  model.profileNote = "note";
+  buildTheRemote(waiting, model);
+  CHECK(drewText(waiting, "System Settings"));
+  // The controls are still there while unpaired: they are what the screen is,
+  // and hiding them would make pairing feel like a different app.
+  CHECK(waiting.has(remoteui::ActionPlayPause));
+
+  Rendered live;
+  model.connected = true;
+  model.pairingHint = "";
+  buildTheRemote(live, model);
+  CHECK(!drewText(live, "System Settings"));
+  CHECK(live.has(remoteui::ActionPlayPause));
 }
 
 // The view bar is the only way between the three forecast views, so all three
@@ -13493,6 +13568,8 @@ int main() {
   testTheFingerprintReadsTheStyleAndNotJustTheTarget();
   testADocumentEndingInANewlineIsStillWrappedOnce();
   testTheHackerNewsReaderAlsoWrapsOncePerDocument();
+  testEveryRemoteControlIsLive();
+  testThePairingSentenceAppearsOnlyWhenItIsNeeded();
   testEveryForecastViewOffersAllThreeSegments();
   testAnUnreportedFieldIsNotDrawnAsZero();
   testPlacesRowsOpenUntilRemoveModeSaysOtherwise();
