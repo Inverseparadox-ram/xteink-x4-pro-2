@@ -97,8 +97,7 @@ bool Store::alreadySaved(const Place& place) const {
   for (const Place& saved : places_) {
     // Roughly a kilometre. Two geocoder rows for one town differ in the fourth
     // decimal and in spelling; matching on the name would save both.
-    if (std::fabs(saved.latitude - place.latitude) < 0.01f &&
-        std::fabs(saved.longitude - place.longitude) < 0.01f) {
+    if (std::fabs(saved.latitude - place.latitude) < 0.01f && std::fabs(saved.longitude - place.longitude) < 0.01f) {
       return true;
     }
   }

@@ -35,18 +35,18 @@ constexpr uint8_t kReportKeyboard = 2;
 // set is decided by the screens.
 const uint8_t kReportMap[] = {
     // --- Consumer control -------------------------------------------------
-    0x05, 0x0C,              // Usage Page (Consumer)
-    0x09, 0x01,              // Usage (Consumer Control)
-    0xA1, 0x01,              // Collection (Application)
-    0x85, kReportConsumer,   //   Report ID
-    0x15, 0x00,              //   Logical Minimum (0)
-    0x26, 0xFF, 0x03,        //   Logical Maximum (0x3FF)
-    0x19, 0x00,              //   Usage Minimum (0)
-    0x2A, 0xFF, 0x03,        //   Usage Maximum (0x3FF)
-    0x75, 0x10,              //   Report Size (16)
-    0x95, 0x01,              //   Report Count (1)
-    0x81, 0x00,              //   Input (Data, Array, Absolute)
-    0xC0,                    // End Collection
+    0x05, 0x0C,             // Usage Page (Consumer)
+    0x09, 0x01,             // Usage (Consumer Control)
+    0xA1, 0x01,             // Collection (Application)
+    0x85, kReportConsumer,  //   Report ID
+    0x15, 0x00,             //   Logical Minimum (0)
+    0x26, 0xFF, 0x03,       //   Logical Maximum (0x3FF)
+    0x19, 0x00,             //   Usage Minimum (0)
+    0x2A, 0xFF, 0x03,       //   Usage Maximum (0x3FF)
+    0x75, 0x10,             //   Report Size (16)
+    0x95, 0x01,             //   Report Count (1)
+    0x81, 0x00,             //   Input (Data, Array, Absolute)
+    0xC0,                   // End Collection
 
     // --- Keyboard ---------------------------------------------------------
     0x05, 0x01,              // Usage Page (Generic Desktop)

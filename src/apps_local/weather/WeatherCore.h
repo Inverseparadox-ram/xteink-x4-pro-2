@@ -62,9 +62,9 @@ struct Place {
   std::string country;  // "India"
   float latitude = 0.0f;
   float longitude = 0.0f;
-  std::string timezone;   // "Asia/Kolkata", as the forecast reports it
-  Value elevation;        // metres, as the forecast reports it
-  std::string exportName; // the /Weather file last written for this place
+  std::string timezone;    // "Asia/Kolkata", as the forecast reports it
+  Value elevation;         // metres, as the forecast reports it
+  std::string exportName;  // the /Weather file last written for this place
 };
 
 // "Bengaluru, Karnataka, India", skipping the parts that are empty or that

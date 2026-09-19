@@ -95,7 +95,7 @@ struct Detail {
 
 struct NowModel {
   const char* place = "";
-  const char* headline = "";   // "Slight rain"
+  const char* headline = "";     // "Slight rain"
   const char* temperature = "";  // "23.4"
   const char* feelsLike = "";    // "FEELS LIKE 25.1"
   const char* highLow = "";      // "27 / 19"

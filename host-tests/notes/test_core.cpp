@@ -170,8 +170,15 @@ static void testCaps() {
   // and the store file is hand-editable by anyone who found the /Notes
   // exports, so this is the boundary that has to stop them.
   CHECK(notes::sanitize("a\tb", 100) == "a b", "a tab becomes a space, not a missing glyph");
-  CHECK(notes::sanitize("a\x01" "\x1F" "b", 100) == "ab", "other C0 controls are dropped");
-  CHECK(notes::sanitize("a\x7F" "b", 100) == "ab", "DEL is dropped");
+  CHECK(notes::sanitize("a\x01"
+                        "\x1F"
+                        "b",
+                        100) == "ab",
+        "other C0 controls are dropped");
+  CHECK(notes::sanitize("a\x7F"
+                        "b",
+                        100) == "ab",
+        "DEL is dropped");
   CHECK(notes::sanitize("keep\nthe\nlines", 100) == "keep\nthe\nlines", "newlines survive: they are content");
   // The one multi-byte case worth stating: a control filter that worked on
   // signed chars would eat every byte of a UTF-8 sequence.

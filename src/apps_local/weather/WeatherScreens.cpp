@@ -218,8 +218,7 @@ void buildResults(toybox::Screen& screen, const ResultsModel& model) {
 
   if (model.count <= 0) {
     if (model.searched) {
-      emptyState(screen, "NO MATCH",
-                 "Nothing by that name. Try the local spelling, or a larger town nearby.");
+      emptyState(screen, "NO MATCH", "Nothing by that name. Try the local spelling, or a larger town nearby.");
     } else {
       emptyState(screen, "SEARCHING", "Asking Open-Meteo which places have this name.");
     }
@@ -239,8 +238,7 @@ void buildResults(toybox::Screen& screen, const ResultsModel& model) {
   list.balanceWrappedLabelWithValue = false;
   // The whole body, because this screen has no footer: choosing a place IS the
   // action, and a bar under it would only hold a second way to leave.
-  screen.list(list, static_cast<int16_t>(screen.device().height - kBodyTop - toybox::kMargin),
-              fui::LayoutAnchor::Top);
+  screen.list(list, static_cast<int16_t>(screen.device().height - kBodyTop - toybox::kMargin), fui::LayoutAnchor::Top);
 }
 
 // --- NOW -----------------------------------------------------------------
@@ -517,8 +515,7 @@ void buildWeek(toybox::Screen& screen, const WeekModel& model) {
   for (int i = 0; i < model.count; ++i) {
     if (y + rowH > band.bottom()) break;
     const DayRow& row = model.rows[i];
-    screen.target().text(fui::makeRect(band.x, y, dayW, lineH), row.day,
-                         plain(toybox::kUiFont, fui::TextAlign::Left));
+    screen.target().text(fui::makeRect(band.x, y, dayW, lineH), row.day, plain(toybox::kUiFont, fui::TextAlign::Left));
     screen.target().text(fui::makeRect(static_cast<int16_t>(band.x + dayW), y, tempW, lineH), row.highLow,
                          plain(toybox::kUiFont, fui::TextAlign::Right));
     // The second line carries what the first cannot: the conditions in words,

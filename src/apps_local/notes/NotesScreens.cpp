@@ -75,10 +75,9 @@ void emptyState(toybox::Screen& screen, const char* headline, const char* senten
   const int16_t top = static_cast<int16_t>(kBodyTop + toybox::kMargin * 2);
   screen.target().text(fui::makeRect(toybox::kMargin, top, width, headlineH), headline,
                        plain(toybox::kDisplayFont, fui::TextAlign::Center));
-  screen.target().text(
-      fui::makeRect(toybox::kMargin, static_cast<int16_t>(top + headlineH + toybox::kGutter), width,
-                    static_cast<int16_t>(bodyH * 3)),
-      sentence, plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 3));
+  screen.target().text(fui::makeRect(toybox::kMargin, static_cast<int16_t>(top + headlineH + toybox::kGutter), width,
+                                     static_cast<int16_t>(bodyH * 3)),
+                       sentence, plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 3));
 }
 
 // A footer of one wide primary button and one square icon button at its right,
@@ -108,8 +107,8 @@ void footerWithSquare(toybox::Screen& screen, const char* label, const fui::Acti
   // Outlined, so it reads as secondary to the filled primary rather than as a
   // second control of equal weight.
   square.styles = toybox::rowStyles();
-  screen.button(square, fui::makeRect(static_cast<int16_t>(toybox::kMargin + barWidth + gap), footerY, side,
-                                      kFooterHeight));
+  screen.button(square,
+                fui::makeRect(static_cast<int16_t>(toybox::kMargin + barWidth + gap), footerY, side, kFooterHeight));
 }
 
 }  // namespace
@@ -399,10 +398,9 @@ void buildDeleteConfirm(toybox::Screen& screen, const ConfirmModel& model) {
                        name);
 
   const int16_t bodyH = screen.target().lineHeight(toybox::kUiFont);
-  screen.target().text(
-      fui::makeRect(toybox::kMargin, static_cast<int16_t>(top + headlineH * 2 + toybox::kGutter), width,
-                    static_cast<int16_t>(bodyH * 3)),
-      model.detail, plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 3));
+  screen.target().text(fui::makeRect(toybox::kMargin, static_cast<int16_t>(top + headlineH * 2 + toybox::kGutter),
+                                     width, static_cast<int16_t>(bodyH * 3)),
+                       model.detail, plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 3));
 
   // KEEP IT is the prominent one and sits on the fork-wide primary-action
   // band, where a thumb expects "the button". DELETE is a smaller outlined
@@ -421,8 +419,8 @@ void buildDeleteConfirm(toybox::Screen& screen, const ConfirmModel& model) {
   destroy.action = ActionDeleteConfirm;
   destroy.styles = toybox::rowStyles();
   screen.button(destroy, fui::makeRect(static_cast<int16_t>(toybox::kMargin + (width - deleteWidth) / 2),
-                                       static_cast<int16_t>(footerY - kFooterHeight - toybox::kMargin * 2),
-                                       deleteWidth, kFooterHeight));
+                                       static_cast<int16_t>(footerY - kFooterHeight - toybox::kMargin * 2), deleteWidth,
+                                       kFooterHeight));
 }
 
 }  // namespace notesui

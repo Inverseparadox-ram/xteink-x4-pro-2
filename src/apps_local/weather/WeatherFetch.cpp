@@ -198,8 +198,8 @@ int httpGet(const std::string& url, std::string& body, std::string& message) {
     return 0;
   }
   close(fd);
-  const std::string cmd = "curl -sS -m 60 -o '" + std::string(outPath) +
-                          "' -w '%{http_code}' -H 'Accept: application/json' '" + url + "'";
+  const std::string cmd =
+      "curl -sS -m 60 -o '" + std::string(outPath) + "' -w '%{http_code}' -H 'Accept: application/json' '" + url + "'";
   FILE* pipe = popen(cmd.c_str(), "r");
   char statusBuf[8] = {};
   if (pipe) {
@@ -406,8 +406,7 @@ bool searchPlaces(const std::string& query, std::vector<Place>& results, std::st
     return false;
   }
 
-  const std::string url =
-      baseGeocode() + "/v1/search?name=" + urlEncode(trimmed) + "&count=10&language=en&format=json";
+  const std::string url = baseGeocode() + "/v1/search?name=" + urlEncode(trimmed) + "&count=10&language=en&format=json";
   std::string body;
   const int status = httpGet(url, body, message);
   if (!checkBody(status, body, message)) return false;

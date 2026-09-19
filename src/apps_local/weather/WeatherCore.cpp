@@ -176,8 +176,8 @@ const char* shortCode(const int code) {
 }
 
 const char* compassPoint(const float degrees) {
-  static constexpr const char* kPoints[16] = {"N",  "NNE", "NE", "ENE", "E",  "ESE", "SE", "SSE",
-                                              "S",  "SSW", "SW", "WSW", "W",  "WNW", "NW", "NNW"};
+  static constexpr const char* kPoints[16] = {"N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                                              "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"};
   // 16 points, not 8: eight call a twenty-degree swing the same wind, and a
   // forecast that cannot tell a sea breeze from a land breeze is not
   // descriptive.

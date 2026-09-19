@@ -125,8 +125,8 @@ struct ChecklistRow {
 struct ChecklistModel {
   const char* title = "";
   const ChecklistRow* rows = nullptr;
-  int count = 0;     // rows on THIS page
-  int firstIndex = 0;  // absolute index of rows[0], so a tap reports the item
+  int count = 0;                        // rows on THIS page
+  int firstIndex = 0;                   // absolute index of rows[0], so a tap reports the item
   const char* progressLabel = nullptr;  // "3 OF 7", on the band
   const char* pageLabel = nullptr;      // "2 / 3", under the progress
   bool editing = false;

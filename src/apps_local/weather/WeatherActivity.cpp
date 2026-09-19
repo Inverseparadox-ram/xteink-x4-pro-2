@@ -494,8 +494,7 @@ void WeatherActivity::buildPlaceRows(const fui::DrawTarget& target, const fui::D
 
   fui::TextStyle titleStyle = tokens.bodyText;
   titleStyle.maxLines = 1;
-  const int16_t titleWidth =
-      static_cast<int16_t>(weatherui::placesBand(device).width - 2 * tokens.listSidePadding);
+  const int16_t titleWidth = static_cast<int16_t>(weatherui::placesBand(device).width - 2 * tokens.listSidePadding);
 
   rowIds_.reserve(static_cast<size_t>(shown));
   rowLabels_.reserve(static_cast<size_t>(shown));
@@ -653,7 +652,8 @@ void WeatherActivity::buildDetails() {
     char text[32];
     std::snprintf(text, sizeof(text), "%.0f C", static_cast<double>(r.temperature.v));
     return std::string(text);
-  }() : std::string("--");
+  }()
+                                       : std::string("--");
   feelsText_.clear();
   if (r.apparent.has) {
     char text[48];

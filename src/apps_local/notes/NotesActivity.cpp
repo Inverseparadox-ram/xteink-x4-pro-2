@@ -35,7 +35,7 @@ void formatDate(const uint32_t when, char* out, const size_t size) {
   static constexpr char kMonths[][4] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                         "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
   const time_t stamp = static_cast<time_t>(when);
-  struct tm parts {};
+  struct tm parts{};
   localtime_r(&stamp, &parts);
   if (parts.tm_mon < 0 || parts.tm_mon > 11) {
     out[0] = '\0';
@@ -144,8 +144,8 @@ void NotesActivity::pageList(const int delta) {
 
 void NotesActivity::edit(const Editing what, const char* title, const std::string& initial, const size_t maxChars,
                          const bool deletable) {
-  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, title, initial, maxChars,
-                                                           InputType::Text);
+  auto keyboard =
+      makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, title, initial, maxChars, InputType::Text);
   if (!keyboard) {
     LOG_ERR("NOTES", "OOM: keyboard");
     return;
@@ -405,9 +405,10 @@ void NotesActivity::loop() {
           RenderLock lock(*this);
           target_ = Target::None;
           targetItem_ = -1;
-          phase_ = openId_ == 0 ? Phase::List : (currentNote() != nullptr && currentNote()->kind == notes::Kind::Text
-                                                     ? Phase::Text
-                                                     : Phase::Checklist);
+          phase_ = openId_ == 0
+                       ? Phase::List
+                       : (currentNote() != nullptr && currentNote()->kind == notes::Kind::Text ? Phase::Text
+                                                                                               : Phase::Checklist);
         }
         break;
     }

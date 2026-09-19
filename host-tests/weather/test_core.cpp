@@ -131,7 +131,11 @@ static void testPlaceNames() {
 static void testSanitize() {
   CHECK(weather::sanitize("  Bengaluru  ", 64) == "Bengaluru", "trimmed both ends");
   CHECK(weather::sanitize("Foo\tBar", 64) == "Foo Bar", "a tab becomes a space, not a missing glyph");
-  CHECK(weather::sanitize("a\x01" "\x1F" "b", 64) == "ab", "other C0 controls are dropped");
+  CHECK(weather::sanitize("a\x01"
+                          "\x1F"
+                          "b",
+                          64) == "ab",
+        "other C0 controls are dropped");
   CHECK(weather::sanitize("caf\xC3\xA9", 64) == "caf\xC3\xA9", "UTF-8 continuation bytes are not controls");
   const std::string euro = "\xE2\x82\xAC";
   CHECK(weather::sanitize(euro + euro, 4) == euro, "a cut lands on a code point boundary");
