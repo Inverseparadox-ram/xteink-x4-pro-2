@@ -42,14 +42,15 @@ So no screen here shows a state it cannot know:
   toggle is what macOS honours most reliably, but it is a toggle: when the
   remote and the Mac disagree about what is playing -- which they always might
   -- only a button that means one thing gets you out.
-- **The volume slider is relative and says so.** HID sends volume *steps*, not
+- **The volume slider is relative.** HID sends volume *steps*, not
   levels, and cannot read one back. macOS moves in sixteenths, so the slider
   has seventeen positions and a drag from a to b sends |b-a| presses -- exact,
   as long as the volume is only ever changed from here. Dragging to either end
   sends a full sixteen, which is the one move that lands on a level both sides
   agree about after the Mac has been touched directly.
-- **The caption says `VOLUME 8 / 16`**, naming the remote's own count rather
-  than implying it knows the Mac's.
+  The slider's own knob is the only readout; there is no caption, because a
+  number beside it would read as the Mac's volume, which is a thing this app
+  has no way to know.
 
 **There is no now-playing display, and there cannot be one over BLE from a
 Mac.** iOS publishes AMS (Apple Media Service), a BLE service that would answer
@@ -64,15 +65,36 @@ scrub-while-held, not a jump. The ten and five second jumps people mean belong
 to the *player*.
 
 So the seek buttons type the player's own shortcut, and a profile says which.
-The footer names the profile and its consequence, and the button faces change
-with it -- a button that said "+10s" under a profile that cannot deliver ten
-seconds would be lying.
+The footer names the profile, and the button faces change with it: the
+circular arrow carries a **number only where the profile can keep one**. Under
+the others it stands alone, because a button reading "10" that scrubs for as
+long as the host feels like would be lying.
 
-| Profile | Forward | Back | Buttons say |
+| Profile | Forward | Back | Seek buttons show |
 | --- | --- | --- | --- |
-| YouTube / browser | `L` | `←` | `+10s` / `-5s` -- exact, YouTube defines them |
-| IINA / QuickTime / VLC | `→` | `←` | `FWD` / `BACK` -- the player sets the jump |
-| Any player | hold Fast Forward | hold Rewind | `SCRUB >>` / `<< SCRUB` |
+| `YOUTUBE` | `L` | `←` | arrow + `10` / arrow + `5` -- exact, YouTube defines them |
+| `PLAYER KEYS` | `→` | `←` | the arrows alone -- the player sets the jump |
+| `SCRUB` | hold Fast Forward | hold Rewind | the arrows alone -- the host sets the distance |
+
+## The screen is marks, not words
+
+Every control is an icon: 64px prev / play-pause / next across the top, the two
+circular seek arrows, then play, pause and stop at 40px, then a speaker mark,
+the slider and a mute mark. Three pieces of text survive the whole panel, and
+each one is there because no drawing does its job:
+
+- the **two seek numbers**, under the one profile that defines them;
+- the **profile name** in the footer, because no mark distinguishes YouTube
+  from IINA from a blind scrub while the seek buttons mean different things
+  under each;
+- the **pairing sentence**, shown only while unpaired, because nothing draws
+  "System Settings > Bluetooth". Once connected it collapses to a single
+  bluetooth glyph -- the live controls under it are the rest of the message.
+
+`host-tests/ui` asserts the absence directly: it renders the panel and fails if
+`PLAY/PAUSE`, `VOLUME`, `MUTE`, `FWD`, `PREV`, `NEXT`, `STOP` or `PAUSE` ever
+reach it as text. A label creeping back onto a button face is invisible in a
+diff and obvious on the device.
 
 ## The radio is up only while the app is open
 

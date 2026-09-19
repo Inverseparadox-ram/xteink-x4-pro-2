@@ -26,18 +26,18 @@
 #include "../../src/apps_local/hackernews/HackerNewsScreens.h"
 #include "../../src/apps_local/insider/InsiderScreens.h"
 #include "../../src/apps_local/instapaper/InstapaperScreens.h"
-#include "../../src/apps_local/notes/NotesScreens.h"
-#include "../../src/apps_local/weather/WeatherScreens.h"
-#include "../../src/apps_local/remote/RemoteScreens.h"
 #include "../../src/apps_local/jaipur/JaipurScreens.h"
 #include "../../src/apps_local/knucklebones/KnucklebonesScreens.h"
 #include "../../src/apps_local/link/LinkScreens.h"
 #include "../../src/apps_local/minesweeper/MinesweeperScreens.h"
 #include "../../src/apps_local/murdle/MurdleScreens.h"
 #include "../../src/apps_local/murdle/MurdleText.h"
+#include "../../src/apps_local/notes/NotesScreens.h"
 #include "../../src/apps_local/picross/PicrossScreens.h"
 #include "../../src/apps_local/player/PlayerAvatar.h"
 #include "../../src/apps_local/player/PlayerScreen.h"
+#include "../../src/apps_local/remote/RemoteCore.h"
+#include "../../src/apps_local/remote/RemoteScreens.h"
 #include "../../src/apps_local/seasalt/SeaSaltScreens.h"
 #include "../../src/apps_local/solitaire/SolitaireScreens.h"
 #include "../../src/apps_local/study/StudyScreens.h"
@@ -52,6 +52,7 @@
 #include "../../src/apps_local/wallpapers/WallpapersCore.h"
 #include "../../src/apps_local/wallpapers/WallpapersScreens.h"
 #include "../../src/apps_local/wavelength/WavelengthScreens.h"
+#include "../../src/apps_local/weather/WeatherScreens.h"
 #include "../../src/apps_local/wikipedia/WikipediaScreens.h"
 #include "../../src/apps_local/xkcd/XkcdScreens.h"
 #include "../../src/apps_local/yahtzee/YahtzeeScreens.h"
@@ -9180,15 +9181,12 @@ void testTheHackerNewsReaderAlsoWrapsOncePerDocument() {
 void testEveryRemoteControlIsLive() {
   Rendered out;
   remoteui::RemoteModel model;
-  model.linkLabel = "CONNECTED";
   model.connected = true;
-  model.forwardLabel = "+10s";
-  model.backLabel = "-5s";
-  model.volumeCaption = "VOLUME 8 / 16";
+  model.forwardSeconds = "10";
+  model.backSeconds = "5";
   model.volume = 8;
   model.volumeMax = 16;
-  model.profileName = "YOUTUBE / BROWSER";
-  model.profileNote = "Types L and left-arrow: 10s and 5s in YouTube.";
+  model.profileName = "YOUTUBE";
   buildTheRemote(out, model);
 
   CHECK(out.has(remoteui::ActionPlayPause));
@@ -9205,26 +9203,50 @@ void testEveryRemoteControlIsLive() {
   CHECK(out.has(remoteui::ActionForget));
   CHECK(!out.interactions.overflowed());
 
-  // The labels are the app's only way of telling the truth about what a button
-  // does, so they have to reach the panel intact.
-  CHECK(drewText(out, "PLAY/PAUSE"));
-  CHECK(drewText(out, "+10s"));
-  CHECK(drewText(out, "-5s"));
-  CHECK(drewText(out, "VOLUME 8 / 16"));
+  // The panel is marks. Every one of these words used to sit on a button face
+  // and every one of them was a picture's job -- this is the check that keeps
+  // them off, because a label creeping back is invisible in a diff and obvious
+  // on the device.
+  for (const char* word : {"PLAY/PAUSE", "VOLUME", "MUTE", "FWD", "PREV", "NEXT", "STOP", "PAUSE"}) {
+    CHECK(!drewText(out, word));
+  }
+
+  // Two numbers survive, because no mark says "ten seconds", and one name,
+  // because no mark distinguishes YouTube from IINA.
+  CHECK(drewText(out, "10"));
+  CHECK(drewText(out, "5"));
+  CHECK(drewText(out, "YOUTUBE"));
+}
+
+// A profile that cannot promise a number must print none: under a blind scrub
+// the seek buttons are the arrow alone. A stale number here would be the app
+// claiming a jump the host decides the length of.
+void testSeekNumbersAppearOnlyWhereTheProfileKeepsThem() {
+  Rendered out;
+  remoteui::RemoteModel model;
+  model.connected = true;
+  model.forwardSeconds = remote::forwardSeconds(remote::Profile::MediaKey);
+  model.backSeconds = remote::backSeconds(remote::Profile::MediaKey);
+  model.profileName = remote::profileName(remote::Profile::MediaKey);
+  buildTheRemote(out, model);
+
+  CHECK(!drewText(out, "10"));
+  CHECK(!drewText(out, "5"));
+  // The buttons are still live -- wordless is not disabled.
+  CHECK(out.has(remoteui::ActionForward));
+  CHECK(out.has(remoteui::ActionBack));
 }
 
 // Connected and not connected are different screens, and the difference is the
-// sentence that says how to pair. A remote that is merely "not connected"
-// tells nobody what to do next.
+// sentence that says how to pair. Connected is the one state that needs no
+// words at all; unpaired is the one case no icon can carry, because nothing
+// draws "System Settings > Bluetooth".
 void testThePairingSentenceAppearsOnlyWhenItIsNeeded() {
   Rendered waiting;
   remoteui::RemoteModel model;
-  model.linkLabel = "PAIR ME";
   model.pairingHint = "On the Mac: System Settings > Bluetooth, then pick it.";
   model.connected = false;
-  model.volumeCaption = "VOLUME 8 / 16";
-  model.profileName = "YOUTUBE / BROWSER";
-  model.profileNote = "note";
+  model.profileName = "YOUTUBE";
   buildTheRemote(waiting, model);
   CHECK(drewText(waiting, "System Settings"));
   // The controls are still there while unpaired: they are what the screen is,
@@ -13569,6 +13591,7 @@ int main() {
   testADocumentEndingInANewlineIsStillWrappedOnce();
   testTheHackerNewsReaderAlsoWrapsOncePerDocument();
   testEveryRemoteControlIsLive();
+  testSeekNumbersAppearOnlyWhereTheProfileKeepsThem();
   testThePairingSentenceAppearsOnlyWhenItIsNeeded();
   testEveryForecastViewOffersAllThreeSegments();
   testAnUnreportedFieldIsNotDrawnAsZero();

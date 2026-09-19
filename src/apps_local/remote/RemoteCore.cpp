@@ -1,7 +1,5 @@
 #include "RemoteCore.h"
 
-#include <cstdio>
-
 namespace remote {
 namespace {
 
@@ -16,31 +14,15 @@ constexpr uint8_t kKeyLeft = 0x50;
 const char* profileName(const Profile profile) {
   switch (profile) {
     case Profile::Browser:
-      return "YOUTUBE / BROWSER";
+      return "YOUTUBE";
     case Profile::Player:
-      return "IINA / QUICKTIME / VLC";
+      return "PLAYER KEYS";
     case Profile::MediaKey:
-      return "ANY PLAYER (SCRUB)";
+      return "SCRUB";
     case Profile::Count:
       break;
   }
   return "UNKNOWN";
-}
-
-const char* profileNote(const Profile profile) {
-  switch (profile) {
-    case Profile::Browser:
-      // The one profile whose numbers are exact, because YouTube defines them:
-      // L is ten seconds on, the left arrow is five seconds back.
-      return "Types L and left-arrow: 10s and 5s in YouTube.";
-    case Profile::Player:
-      return "Types the arrow keys. The player sets the jump.";
-    case Profile::MediaKey:
-      return "Holds scrub. Works anywhere; the host sets how far.";
-    case Profile::Count:
-      break;
-  }
-  return "";
 }
 
 KeyChord forwardChord(const Profile profile) {
@@ -72,35 +54,14 @@ KeyChord backChord(const Profile profile) {
   return KeyChord{};
 }
 
-const char* forwardLabel(const Profile profile) {
-  switch (profile) {
-    case Profile::Browser:
-      return "+10s";
-    case Profile::Player:
-      // The arrow keys jump whatever the player is set to, so the button does
-      // not claim a number it cannot keep.
-      return "FWD";
-    case Profile::MediaKey:
-      return "SCRUB >>";
-    case Profile::Count:
-      break;
-  }
-  return "FWD";
+const char* forwardSeconds(const Profile profile) {
+  // Only YouTube defines the numbers, so only YouTube prints them. Under the
+  // others the mark stands alone: "FWD" was a word doing an arrow's job, and
+  // an arrow was already there.
+  return profile == Profile::Browser ? "10" : nullptr;
 }
 
-const char* backLabel(const Profile profile) {
-  switch (profile) {
-    case Profile::Browser:
-      return "-5s";
-    case Profile::Player:
-      return "BACK";
-    case Profile::MediaKey:
-      return "<< SCRUB";
-    case Profile::Count:
-      break;
-  }
-  return "BACK";
-}
+const char* backSeconds(const Profile profile) { return profile == Profile::Browser ? "5" : nullptr; }
 
 int clampVolume(const int position) {
   if (position < 0) return 0;
@@ -117,13 +78,6 @@ int volumeStepsBetween(const int from, const int to) {
   if (b == 0) return -kVolumeSteps;
   if (b == kVolumeSteps) return kVolumeSteps;
   return b - a;
-}
-
-const char* formatVolume(const int position, char* out, const size_t size) {
-  // "VOLUME 11 / 16" -- the remote's own count, named as such. It is not the
-  // Mac's volume and the caption must not read as though it were.
-  std::snprintf(out, size, "VOLUME %d / %d", clampVolume(position), kVolumeSteps);
-  return out;
 }
 
 }  // namespace remote

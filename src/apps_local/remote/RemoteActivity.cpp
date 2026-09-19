@@ -132,8 +132,8 @@ void RemoteActivity::setVolume(const int position) {
 void RemoteActivity::cycleProfile() {
   {
     RenderLock lock(*this);
-    profile_ = static_cast<remote::Profile>((static_cast<int>(profile_) + 1) %
-                                            static_cast<int>(remote::Profile::Count));
+    profile_ =
+        static_cast<remote::Profile>((static_cast<int>(profile_) + 1) % static_cast<int>(remote::Profile::Count));
   }
   saveSettings();
   requestUpdate();
@@ -282,22 +282,22 @@ void RemoteActivity::render(RenderLock&&) {
     const remote::Link link = remote::link();
     remoteui::RemoteModel model;
     model.connected = link == remote::Link::Connected;
-    model.linkLabel = model.connected ? "CONNECTED" : "PAIR ME";
     if (!model.connected) {
       // Named steps, because a BLE peripheral that is merely "not connected"
       // tells nobody what to do next.
-      pairingHint_ = std::string("On the Mac: System Settings > Bluetooth, then pick \"") +
-                     remote::deviceName() + "\". It is only discoverable while this screen is open.";
+      // The only sentence left in the app, and it earns its place: no mark
+      // says "System Settings > Bluetooth", and a remote the Mac cannot see
+      // has to say where to look.
+      pairingHint_ = std::string("On the Mac: System Settings > Bluetooth, then \"") + remote::deviceName() +
+                     "\". Discoverable only while this screen is open.";
       model.pairingHint = pairingHint_.c_str();
     }
-    model.forwardLabel = remote::forwardLabel(profile_);
-    model.backLabel = remote::backLabel(profile_);
+    model.forwardSeconds = remote::forwardSeconds(profile_);
+    model.backSeconds = remote::backSeconds(profile_);
     model.volume = volume_;
     model.volumeMax = remote::kVolumeSteps;
     model.muted = muted_;
-    model.volumeCaption = remote::formatVolume(volume_, volumeCaption_, sizeof(volumeCaption_));
     model.profileName = remote::profileName(profile_);
-    model.profileNote = remote::profileNote(profile_);
     remoteui::buildRemote(screen, model);
   }
 

@@ -1,7 +1,6 @@
 #pragma once
 
-// The remote's model: the seek profiles, the volume arithmetic, and the words
-// on the buttons.
+// The remote's model: the seek profiles and the volume arithmetic.
 //
 // Freestanding C++17 -- no NimBLE, no renderer, no Activity -- so
 // host-tests/remote builds it with a bare compiler. The radio lives in
@@ -28,7 +27,6 @@
 //    a known state whatever the Mac was doing.
 // ---------------------------------------------------------------------------
 
-#include <cstddef>
 #include <cstdint>
 
 namespace remote {
@@ -52,29 +50,25 @@ struct KeyChord {
 
 // Which player the seek buttons are typing at.
 enum class Profile : uint8_t {
-  Browser,  // YouTube and friends: L forward, left-arrow back
-  Player,   // IINA, QuickTime, VLC: the arrow keys
-  MediaKey, // no shortcut: hold the transport's own scrub keys
+  Browser,   // YouTube and friends: L forward, left-arrow back
+  Player,    // IINA, QuickTime, VLC: the arrow keys
+  MediaKey,  // no shortcut: hold the transport's own scrub keys
   Count,
 };
 
 // The name on the settings row.
 const char* profileName(Profile profile);
 
-// One line saying what the seek buttons will actually do, because the whole
-// point of the profile is that the answer differs.
-const char* profileNote(Profile profile);
-
 // What the forward and back buttons send under this profile. A chord whose
 // `key` is 0 means the caller should hold the media scrub key instead.
 KeyChord forwardChord(Profile profile);
 KeyChord backChord(Profile profile);
 
-// What to print on the two seek buttons. These are not always "+10s" and
-// "-5s": under the media-key profile the host decides how far a scrub goes, so
-// the button says so rather than naming a number it cannot keep.
-const char* forwardLabel(Profile profile);
-const char* backLabel(Profile profile);
+// The number beside the seek mark, or nullptr when this profile cannot keep
+// one -- the host decides how far a scrub goes, so the button is the mark
+// alone rather than a number it would be inventing.
+const char* forwardSeconds(Profile profile);
+const char* backSeconds(Profile profile);
 
 // Clamps a slider position to 0..kVolumeSteps.
 int clampVolume(int position);
@@ -84,10 +78,5 @@ int clampVolume(int position);
 // that direction regardless of where it thought it was -- that is the move
 // that resyncs a slider the Mac has drifted away from.
 int volumeStepsBetween(int from, int to);
-
-// "VOLUME 11 / 16", the honest caption: it names the remote's own count, not
-// the Mac's.
-// Writes into `out` and returns it.
-const char* formatVolume(int position, char* out, size_t size);
 
 }  // namespace remote

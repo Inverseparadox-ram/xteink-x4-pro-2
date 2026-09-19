@@ -1,5 +1,5 @@
-// Freestanding tests for RemoteCore: the seek profiles, the volume arithmetic
-// and the words on the buttons.
+// Freestanding tests for RemoteCore: the seek profiles and the volume
+// arithmetic.
 //
 // The thing under test is HONESTY. This app cannot read anything back from the
 // host -- not the track, not the volume, not whether the music is playing --
@@ -26,25 +26,27 @@ static int checks = 0;
     }                                                  \
   } while (0)
 
-static bool has(const char* haystack, const char* needle) { return std::strstr(haystack, needle) != nullptr; }
-
-// Only the browser profile knows what "+10s" means, because only YouTube
-// defines it. The others must not print a number they cannot keep.
+// Only the browser profile knows what ten and five seconds mean, because only
+// YouTube defines them. The others print no number at all -- the face is the
+// arrow alone rather than a promise the host decides.
 static void testOnlyTheProfileThatKnowsTheNumbersPrintsThem() {
-  CHECK(std::string(remote::forwardLabel(remote::Profile::Browser)) == "+10s", "browser forward is exact");
-  CHECK(std::string(remote::backLabel(remote::Profile::Browser)) == "-5s", "browser back is exact");
+  CHECK(std::string(remote::forwardSeconds(remote::Profile::Browser)) == "10", "browser forward is exactly ten");
+  CHECK(std::string(remote::backSeconds(remote::Profile::Browser)) == "5", "browser back is exactly five");
 
   for (const remote::Profile p : {remote::Profile::Player, remote::Profile::MediaKey}) {
-    CHECK(!has(remote::forwardLabel(p), "10"), "a profile that cannot promise 10s does not print it");
-    CHECK(!has(remote::backLabel(p), "5s"), "a profile that cannot promise 5s does not print it");
+    CHECK(remote::forwardSeconds(p) == nullptr, "a profile that cannot promise a number prints none");
+    CHECK(remote::backSeconds(p) == nullptr, "in both directions");
   }
-  // And every profile says, in one line, what its buttons will really do.
+
+  // The profile name is the one word left on the screen, so it has to carry
+  // the whole distinction on its own.
   for (int i = 0; i < static_cast<int>(remote::Profile::Count); ++i) {
     const remote::Profile p = static_cast<remote::Profile>(i);
     CHECK(remote::profileName(p)[0] != '\0', "profile %d is named", i);
-    CHECK(remote::profileNote(p)[0] != '\0', "profile %d explains itself", i);
     CHECK(std::string(remote::profileName(p)) != "UNKNOWN", "profile %d is a real profile", i);
+    CHECK(std::strlen(remote::profileName(p)) <= 12, "profile %d's name fits the footer", i);
   }
+  CHECK(std::string(remote::profileName(remote::Profile::Browser)) == "YOUTUBE", "the browser profile names the site");
 }
 
 // The browser profile is the whole reason the seek buttons are keystrokes: L
@@ -86,21 +88,10 @@ static void testVolumeIsRelativeAndResyncsAtTheEnds() {
   CHECK(remote::kVolumeSteps == 16, "the slider matches macOS's own granularity");
 }
 
-static void testTheVolumeCaptionNamesItsOwnCount() {
-  char buffer[32];
-  CHECK(std::string(remote::formatVolume(11, buffer, sizeof(buffer))) == "VOLUME 11 / 16", "got '%s'", buffer);
-  CHECK(std::string(remote::formatVolume(-3, buffer, sizeof(buffer))) == "VOLUME 0 / 16", "clamped in the caption");
-  // "/ 16" is the load-bearing half: it reads as the remote's own sixteen
-  // notches rather than as a percentage of the Mac's volume, which is a number
-  // this app has no way to know.
-  CHECK(has(remote::formatVolume(8, buffer, sizeof(buffer)), "/ 16"), "the caption says what the scale is");
-}
-
 int main() {
   testOnlyTheProfileThatKnowsTheNumbersPrintsThem();
   testBrowserSeekTypesTheYouTubeKeys();
   testVolumeIsRelativeAndResyncsAtTheEnds();
-  testTheVolumeCaptionNamesItsOwnCount();
   std::printf("%s  remote core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;
 }

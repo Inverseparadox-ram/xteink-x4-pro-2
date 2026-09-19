@@ -23,8 +23,7 @@
 
 class RemoteActivity final : public Activity {
  public:
-  RemoteActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Remote", renderer, mappedInput) {}
+  RemoteActivity(GfxRenderer& renderer, MappedInputManager& mappedInput) : Activity("Remote", renderer, mappedInput) {}
   ~RemoteActivity() override = default;
 
   static std::unique_ptr<Activity> create(GfxRenderer& renderer, MappedInputManager& mappedInput);
@@ -57,7 +56,6 @@ class RemoteActivity final : public Activity {
   remote::Link lastLink_ = remote::Link::Off;
   uint32_t lastBatteryAt_ = 0;
 
-  char volumeCaption_[32] = "";
   std::string pairingHint_;
 
   toybox::Interactions interactions_;

@@ -47,23 +47,23 @@ enum : fui::ActionId {
 };
 
 struct RemoteModel {
-  // "CONNECTED", "PAIR ME" -- what the band says on the right.
-  const char* linkLabel = "";
-  // The sentence under the transport when nothing is connected. Empty once a
-  // host is there, because a connected remote needs no instructions.
+  // The link state is drawn as a mark. The only words are the ones no mark can
+  // carry: where to look on the Mac when it cannot find the device.
   const char* pairingHint = "";
   bool connected = false;
 
-  const char* forwardLabel = "FWD";
-  const char* backLabel = "BACK";
-  const char* volumeCaption = "";
+  // "10" and "5", or null under a profile that cannot promise seconds -- then
+  // the seek buttons are their circular arrows and nothing else.
+  const char* forwardSeconds = nullptr;
+  const char* backSeconds = nullptr;
+
   int volume = 0;
   int volumeMax = 16;
   bool muted = false;
 
-  // The seek profile's name and its one-line consequence, on the footer row.
+  // One short word. No mark distinguishes YouTube from IINA from a blind
+  // scrub, and the seek buttons mean different things under each.
   const char* profileName = "";
-  const char* profileNote = "";
 };
 
 void buildRemote(toybox::Screen& screen, const RemoteModel& model);
