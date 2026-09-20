@@ -48,6 +48,8 @@ mkdir -p "$BUILD_DIR"
   ../../src/apps_local/forehead/ForeheadScreens.cpp \
   ../../src/apps_local/hackernews/HackerNewsScreens.cpp \
   ../../src/apps_local/instapaper/InstapaperScreens.cpp \
+  ../../src/apps_local/clock/ClockCore.cpp \
+  ../../src/apps_local/clock/ClockScreens.cpp \
   ../../src/apps_local/notes/NotesScreens.cpp \
   ../../src/apps_local/weather/WeatherScreens.cpp \
   ../../src/apps_local/remote/RemoteCore.cpp \

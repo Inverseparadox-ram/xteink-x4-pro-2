@@ -468,3 +468,6 @@ weather_done    = check       # leaves it. A 32px cut of the same glyph
                               # `tick` carries at 24px, which is the size the
                               # shelf chooser draws and the only one that
                               # existed until this app needed a band button.
+
+# The clock app.
+clock = clock

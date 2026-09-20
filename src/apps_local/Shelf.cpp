@@ -16,6 +16,7 @@
 #include "battleship/BattleshipActivity.h"
 #include "checkers/CheckersActivity.h"
 #include "chess/ChessActivity.h"
+#include "clock/ClockActivity.h"
 #include "connectfour/ConnectFourActivity.h"
 #include "connections/ConnectionsActivity.h"
 #include "dungeon/DungeonActivity.h"
@@ -79,6 +80,7 @@ constexpr shelf::Item kApps[] = {
     {"HACKER NEWS", &icon_hackernews_32, &HackerNewsActivity::create},
     {"XKCD", &icon_xkcd_32, &XkcdActivity::create},
     {"NOTES", &icon_notes_32, &NotesActivity::create},
+    {"CLOCK", &icon_clock_32, &ClockActivity::create},
     {"WEATHER", &icon_weather_32, &WeatherActivity::create},
     {"REMOTE", &icon_remote_32, &RemoteActivity::create},
     {"GET BOOKS", &icon_getbooks_32, &OpdsBookBrowserActivity::create},

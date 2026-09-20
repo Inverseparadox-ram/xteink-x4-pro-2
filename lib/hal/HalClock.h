@@ -31,6 +31,15 @@ class HalClock {
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;
 
+  // The whole UTC date and time, uncached. Mirrors the signature the
+  // simulator's HalClock shim already carries, so an app that needs the DATE
+  // rather than the clock face (the Clock app's calendar) compiles against
+  // both without a shim of its own. Uncached because the 10s cache above
+  // exists for a status bar redrawn continuously, not for a caller that asks
+  // once a second at most.
+  // Returns false if the RTC is absent or reports its oscillator stopped.
+  bool getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute) const;
+
   // Format time into a caller-provided buffer.
   // 24h mode produces "HH:MM" (needs >=6 bytes); 12h mode produces "H:MM AM"/"HH:MM PM" (needs >=9 bytes).
   // utcOffsetQuarterHoursBiased: biased quarter-hour offset (48 = UTC+0, 0 = UTC-12, 104 = UTC+14).

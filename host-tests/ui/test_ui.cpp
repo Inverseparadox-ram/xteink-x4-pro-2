@@ -18,6 +18,8 @@
 #include "../../src/apps_local/battleship/BattleshipScreens.h"
 #include "../../src/apps_local/checkers/CheckersScreens.h"
 #include "../../src/apps_local/chess/ChessScreens.h"
+#include "../../src/apps_local/clock/ClockCore.h"
+#include "../../src/apps_local/clock/ClockScreens.h"
 #include "../../src/apps_local/connectfour/ConnectFourScreens.h"
 #include "../../src/apps_local/connections/ConnectionsScreens.h"
 #include "../../src/apps_local/dungeon/DungeonScreens.h"
@@ -8402,6 +8404,31 @@ void testTheForeheadResultsMarkTheUnansweredCardApart() {
 
 // --- Instapaper ------------------------------------------------------------
 
+void buildTheClock(Rendered& out, const clockui::ClockModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  // Both passes, as the Activity runs them. The rebind between them is a font
+  // choice and changes no geometry, so the test does not need it.
+  const clockui::ClockLayout layout = clockui::buildClockScreen(screen, model);
+  clockui::buildClockFace(screen, model, layout);
+}
+
+// A model for `year-month`, filled from the same arithmetic the Activity uses.
+clockui::ClockModel clockModelFor(const uint16_t year, const uint8_t month, const uint8_t today) {
+  clockui::ClockModel model;
+  model.time = "4:44 PM";
+  model.dateLine = "SUNDAY 20 SEPTEMBER";
+  model.clockValid = true;
+  model.monthTitle = "SEPTEMBER 2026";
+  model.firstColumn = clockapp::firstColumnOf(year, month);
+  model.daysInMonth = clockapp::daysInMonth(year, month);
+  model.weekRows = clockapp::weekRowsIn(year, month);
+  model.today = today;
+  return model;
+}
+
 void buildTheRemote(Rendered& out, const remoteui::RemoteModel& model) {
   const fui::DeviceContext ctx = device();
   const fui::InputSnapshot noInput{};
@@ -9293,6 +9320,105 @@ void testThePairingSentenceAppearsOnlyWhenItIsNeeded() {
   buildTheRemote(live, model);
   CHECK(!drewText(live, "System Settings"));
   CHECK(live.has(remoteui::ActionPlayPause));
+}
+
+// Every control the clock claims to have is registered and wins the hit test
+// at its own centre. Two counters that look alike is exactly where a control
+// silently routed to its neighbour would go unnoticed: tapping the timer's
+// START and getting the stopwatch's looks like a stopwatch that started
+// itself.
+void testEveryClockControlIsLiveAndReachable() {
+  Rendered out;
+  buildTheClock(out, clockModelFor(2026, 9, 20));
+
+  const fui::ActionId actions[] = {
+      clockui::ActionStopwatchToggle, clockui::ActionStopwatchReset, clockui::ActionTimerToggle,
+      clockui::ActionTimerReset,      clockui::ActionTimerPlus5m,    clockui::ActionTimerPlus1m,
+      clockui::ActionTimerPlus10s,    clockui::ActionTimerPlus1s,
+  };
+  for (const fui::ActionId action : actions) {
+    CHECK(out.has(action));
+    fui::Rect rect{};
+    bool found = false;
+    for (size_t i = 0; i < out.interactions.count(); ++i) {
+      if (out.interactions.data()[i].action == action) {
+        rect = out.interactions.data()[i].rect;
+        found = true;
+      }
+    }
+    CHECK(found);
+    if (!found) continue;
+    const fui::ActionEvent hit = out.tap(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    CHECK(hit.action == action);
+  }
+  CHECK(!out.interactions.overflowed());
+}
+
+// The labels have to reach the panel WHOLE. "START" in a box too narrow for it
+// draws as "STA..." -- which happened, and which every "did it draw?" check
+// passes because the string was handed over intact and the renderer is what
+// shortened it.
+void testTheClockButtonLabelsFitTheirBoxes() {
+  Rendered out;
+  buildTheClock(out, clockModelFor(2026, 9, 20));
+
+  for (const char* label : {"START", "RESET", "+5m", "+1m", "+10s", "+1s"}) {
+    CHECK(drewLabelWhole(out, label));
+  }
+
+  // And STOP replaces START on a running counter rather than joining it.
+  Rendered running;
+  clockui::ClockModel model = clockModelFor(2026, 9, 20);
+  model.stopwatchRunning = true;
+  model.timerRunning = true;
+  buildTheClock(running, model);
+  CHECK(drewLabelWhole(running, "STOP"));
+  CHECK(!drewText(running, "START"));
+}
+
+// The six-row month. August 2026 is 31 days starting on a Saturday, and a grid
+// built for five rows clips the 30th and 31st off the bottom of the panel --
+// which a render of any ordinary month looks perfectly fine for.
+void testASixRowMonthDrawsEveryDay() {
+  for (const uint8_t month : {uint8_t{8}, uint8_t{9}, uint8_t{2}}) {
+    Rendered out;
+    const clockui::ClockModel model = clockModelFor(2026, month, 1);
+    buildTheClock(out, model);
+
+    char day[4];
+    for (uint8_t d = 1; d <= model.daysInMonth; ++d) {
+      std::snprintf(day, sizeof(day), "%u", static_cast<unsigned>(d));
+      bool drawn = false;
+      for (const auto& run : out.target.texts) {
+        if (run.text == day) {
+          drawn = true;
+          break;
+        }
+      }
+      CHECK(drawn);
+    }
+    // And nothing beyond the month's end.
+    std::snprintf(day, sizeof(day), "%u", static_cast<unsigned>(model.daysInMonth + 1));
+    CHECK(!drewLabelWhole(out, day) || model.daysInMonth == 31);
+  }
+}
+
+// An RTC that was never set reads as the year 2000, and a clock confidently
+// showing 12:00 AM under a January 2000 calendar is worse than one saying it
+// does not know.
+void testAnUnsetClockSaysSoRatherThanGuessing() {
+  Rendered out;
+  clockui::ClockModel model;
+  model.clockValid = false;
+  model.monthTitle = "";
+  buildTheClock(out, model);
+
+  CHECK(drewText(out, "--:--"));
+  CHECK(drewText(out, "SET THE CLOCK"));
+  // The counters still work: they come from millis(), not from the RTC, so a
+  // device with a dead clock is still a usable stopwatch.
+  CHECK(out.has(clockui::ActionStopwatchToggle));
+  CHECK(out.has(clockui::ActionTimerToggle));
 }
 
 // The view bar is the only way between the three forecast views, so all three
@@ -13624,6 +13750,10 @@ int main() {
   testTheFingerprintReadsTheStyleAndNotJustTheTarget();
   testADocumentEndingInANewlineIsStillWrappedOnce();
   testTheHackerNewsReaderAlsoWrapsOncePerDocument();
+  testEveryClockControlIsLiveAndReachable();
+  testTheClockButtonLabelsFitTheirBoxes();
+  testASixRowMonthDrawsEveryDay();
+  testAnUnsetClockSaysSoRatherThanGuessing();
   testEveryRemoteControlIsLive();
   testEveryRemoteControlWinsItsOwnCentre();
   testSeekNumbersAppearOnlyWhereTheProfileKeepsThem();
