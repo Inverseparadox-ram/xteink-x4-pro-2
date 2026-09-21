@@ -29,6 +29,29 @@ and this sentence sat at "twenty-one apps, seventeen games" while the shelf
 grew past both. The shelf itself never had that problem, because `Folder`
 computes its `count` from its own table rather than being told.
 
+## Taking a new upstream release: `smerge`
+
+```bash
+./scripts_local/smerge.sh            # to the newest upstream tag
+./scripts_local/smerge.sh v1.14.0    # to a named one
+```
+
+Named after the operation rather than after git, because it is not a plain
+merge: this fork's history starts at a tarball import with no ancestry to
+upstream, so the script grafts the root commit onto the release the tree is
+currently based on ([crossplay] version in platformio.ini) and merges from
+there. That turns thousands of add/add conflicts into a real three-way merge --
+325 files unaided and thirteen conflicts on the 1.13.2 -> 1.13.9 run.
+
+The rule that governs the conflicts: **ours for `src/apps_local/<our app>/`,
+theirs for everything else.** When upstream ships an app we already had, theirs
+replaces ours wholesale -- at 1.13.9 both had a Notes app and they shared a
+name and nothing else.
+
+[docs/smerge.md](docs/smerge.md) is the checklist, including the three traps
+(the submodule pointer, the simulator shim, and the four counts that guards
+derive from the tree) and how to tell an upstream-red suite from one we broke.
+
 ## The one rule that keeps this sustainable
 
 Upstream moves fast and we want its work. Every change we make is measured by
