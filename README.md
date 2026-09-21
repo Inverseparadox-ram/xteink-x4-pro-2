@@ -26,7 +26,7 @@ devices with an 800x480 panel, capacitive touch and two physical buttons
 (three on the Sticky, and the design targets the two both boards share), and
 [CrossPoint](https://crosspointreader.com/) already makes them good at reading.
 CrossPlay is firmware that keeps all of that and adds the other things a screen
-that holds still is good at: **21 games and 11 apps**,
+that holds still is good at: **21 games and 12 apps**,
 spaced-repetition flashcards, comics, a read-later queue, and two devices that
 play together with nothing to set up.
 
@@ -79,7 +79,6 @@ the import lands a real pack instead of failing on an unreachable host.
 | **Study**       | Anki decks with the FSRS scheduler, offline.                             |
 | **Hacker News** | The front page in a reading serif, articles kept on the card.            |
 | **xkcd**        | The archive, packed for the card and drawn one to one.                   |
-| **Notes**       | Write notes and tick off to-do lists, kept as plain text on the card.    |
 | **Clock**       | The time and the month, with a stopwatch and a timer up to 59:59.        |
 | **Weather**     | A full forecast for any place, from Open-Meteo, kept readable on the card. |
 | **Remote**      | A Bluetooth media remote for whatever your Mac is playing.               |
@@ -87,6 +86,8 @@ the import lands a real pack instead of failing on an unreachable host.
 | **Instapaper**  | Your read-later queue, synced both ways: reading position and archiving. |
 | **Wallpapers**  | Pick an image on the card as the sleep screen, one tap to set it.        |
 | **Wikipedia**   | Fifty thousand articles on the card, read like a book, no internet.      |
+| **Calculator**  | A calculator with keys the size of a thumb, and the sums you already did. |
+| **Notes**       | Lists you tick with one hand, kept as plain text files on the card.      |
 
 And the reader is still CrossPoint's reader: the EPUB engine, sync and the file
 browser are theirs and stay theirs.
@@ -220,7 +221,11 @@ you ask it to, from the community mirror at
 [Eyefyre/NYT-Connections-Answers](https://github.com/Eyefyre/NYT-Connections-Answers).
 Trivia's questions are built from the community
 [Jeopardy! clue dataset](https://github.com/jwolle1/jeopardy_clue_dataset).
-Type is Jersey 25 and Instrument Serif, both SIL OFL.
+Type is Jersey 25 and Instrument Serif, both SIL OFL. The Calculator's
+arithmetic is IBM's [decNumber](https://speleotrove.com/decimal/decnumber.html),
+under the ICU License (ICU 1.8.1 and later), vendored at `lib/decNumber` with
+its notice; it is there so the calculator answers 0.1 + 0.2 - 0.3 with zero,
+which a binary one cannot.
 
 Where a game on the shelf carries the name of a published game, that name is
 its owner's trademark and is used to say what the thing is; game mechanics are

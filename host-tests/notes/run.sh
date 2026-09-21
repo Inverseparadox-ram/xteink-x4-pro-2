@@ -1,17 +1,9 @@
 #!/bin/sh
-# Builds and runs the Notes app's freestanding tests. No device and no
-# PlatformIO needed: NotesCore is freestanding C++17.
-#
-#   host-tests/notes/run.sh
+# Builds and runs the note-format tests. NotesCore is freestanding C++17.
 set -e
 cd "$(dirname "$0")"
-# Keyed to this checkout, not just the suite name -- two worktrees sharing one
-# build dir means one tree can run, and pass, a binary the other built.
 BUILD_DIR="${TMPDIR:-/tmp}/$(basename "${CXX:-c++}")-notes-tests-$(cd ../.. && pwd | cksum | cut -d" " -f1)"
 mkdir -p "$BUILD_DIR"
 SRC=../../src/apps_local/notes
-
-"${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Werror \
-  "$SRC/NotesCore.cpp" test_core.cpp -o "$BUILD_DIR/test_core"
-
-"$BUILD_DIR/test_core"
+"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -O2 -I$SRC test_notes.cpp $SRC/NotesCore.cpp -o "$BUILD_DIR/test_notes"
+"$BUILD_DIR/test_notes"

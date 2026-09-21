@@ -12,12 +12,12 @@
 // ---------------------------------------------------------------------------
 // Three decisions worth stating.
 //
-// 1. THE RTC HOLDS UTC, AND THIS APP SHOWS LOCAL. HalClock::begin() says so
-//    outright and the NTP path writes UTC. So the offset has to be applied
-//    HERE, before anything is drawn -- and applied to the whole timestamp, not
-//    just the clock face. A reader who only shifted the hours would show the
-//    right time under the wrong month for five hours a day in Bengaluru, and
-//    the calendar would highlight yesterday.
+// 1. THE ZONE IS THE HAL'S JOB, NOT THIS FILE'S. The RTC keeps UTC and
+//    HalClock::localTime() applies a POSIX TZ rule through localtime_r, so
+//    daylight saving is right year-round. This app used to shift the
+//    timestamp itself by a fixed quarter-hour offset, which no DST rule fits;
+//    upstream 1.13.9 made that unnecessary and the shift is gone. Everything
+//    here takes an ALREADY-LOCAL Civil.
 //
 // 2. THE COUNTERS ARE MILLISECONDS, THE DISPLAY IS SECONDS. The stopwatch and
 //    the timer hold elapsed milliseconds taken from millis(), so the reading
@@ -72,12 +72,6 @@ uint8_t firstColumnOf(uint16_t year, uint8_t month);
 // a Saturday spans six, and a grid built for five clips its last two days. The
 // layout asks rather than assuming, which is the only reason that month draws.
 uint8_t weekRowsIn(uint16_t year, uint8_t month);
-
-// Shifts a UTC timestamp into local time, carrying the date across midnight in
-// either direction. `offsetQuarterHoursBiased` is HalClock's encoding: 48 is
-// UTC+0, 0 is UTC-12, 104 is UTC+14. Out-of-range values clamp rather than
-// throwing the date into a year the calendar cannot draw.
-Civil toLocal(const Civil& utc, uint8_t offsetQuarterHoursBiased);
 
 // --- The strings ----------------------------------------------------------
 

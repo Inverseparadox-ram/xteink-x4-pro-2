@@ -79,8 +79,8 @@ class ClockActivity final : public Activity {
 
   // --- Stopwatch ---
   bool stopwatchRunning_ = false;
-  uint32_t stopwatchStartedAtMs_ = 0;   // millis() when it last started
-  uint32_t stopwatchAccumulatedMs_ = 0; // banked by every stop
+  uint32_t stopwatchStartedAtMs_ = 0;    // millis() when it last started
+  uint32_t stopwatchAccumulatedMs_ = 0;  // banked by every stop
 
   // --- Timer ---
   bool timerRunning_ = false;

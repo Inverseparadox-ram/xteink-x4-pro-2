@@ -14,6 +14,7 @@
 #include "ShelfState.h"
 #include "activities/browser/OpdsBookBrowserActivity.h"
 #include "battleship/BattleshipActivity.h"
+#include "calculator/CalculatorActivity.h"
 #include "checkers/CheckersActivity.h"
 #include "chess/ChessActivity.h"
 #include "clock/ClockActivity.h"
@@ -79,14 +80,19 @@ constexpr shelf::Item kApps[] = {
     {"STUDY", &icon_study_32, &StudyActivity::create},
     {"HACKER NEWS", &icon_hackernews_32, &HackerNewsActivity::create},
     {"XKCD", &icon_xkcd_32, &XkcdActivity::create},
-    {"NOTES", &icon_notes_32, &NotesActivity::create},
-    {"CLOCK", &icon_clock_32, &ClockActivity::create},
-    {"WEATHER", &icon_weather_32, &WeatherActivity::create},
-    {"REMOTE", &icon_remote_32, &RemoteActivity::create},
     {"GET BOOKS", &icon_getbooks_32, &OpdsBookBrowserActivity::create},
     {"INSTAPAPER", &icon_instapaper_32, &InstapaperActivity::create},
     {"WALLPAPERS", &icon_wallpapers_32, &WallpapersActivity::create},
     {"WIKIPEDIA", &icon_wikipedia_32, &WikipediaActivity::create},
+    {"CALCULATOR", &icon_calculator_32, &CalculatorActivity::create},
+    // Card #516. The icon is the Lucide list mark borrowed from Murdle while
+    // the screens are being chosen; a Notes mark comes with the real app.
+    {"NOTES", &icon_murdle_face_clues_32, &NotesActivity::create},
+    // This fork's own, kept after upstream's so a sync lands as an append
+    // rather than a reshuffle of somebody else's rows.
+    {"CLOCK", &icon_clock_32, &ClockActivity::create},
+    {"WEATHER", &icon_weather_32, &WeatherActivity::create},
+    {"REMOTE", &icon_remote_32, &RemoteActivity::create},
 };
 
 // The two rows Home grows, in reading order. Titles are Title Case because

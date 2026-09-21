@@ -1,48 +1,31 @@
 #include "NotesActivity.h"
 
-#include <FreeInkUIGfxRenderer.h>
-#include <Logging.h>
+#include <ESPmDNS.h>
 #include <Memory.h>
+#include <WiFi.h>
 
 #include <cstdio>
-#include <ctime>
 
+#include "../../DevMode.h"
+#include "../../activities/ActivityResult.h"
+#include "../../activities/network/WifiSelectionActivity.h"
 #include "../../activities/util/KeyboardEntryActivity.h"
-#include "../../components/UITheme.h"
+#include "../../util/DeviceHostname.h"
+#include "../../util/QrUtils.h"
 #include "../Shelf.h"
 #include "../ui/ToyboxFonts.h"
 #include "../ui/ToyboxIcons.h"
-#include "../ui/ToyboxText.h"
 #include "../ui/ToyboxTheme.h"
+#include "NotesCore.h"
 
 namespace fui = freeink::ui;
 
 namespace {
 
-// Below this, the clock has never been set: the RTC comes up somewhere in
-// 1970 and a note stamped from it would sort before every real one forever.
-// 2020-01-01, the same floor Instapaper uses.
-constexpr int64_t kClockFloor = 1577836800;
-
-// "12 MAR", or nothing at all when the clock has never been set. A date this
-// device invented is worse than no date: the row would claim the note was
-// written on a day it was not.
-void formatDate(const uint32_t when, char* out, const size_t size) {
-  if (when == 0) {
-    out[0] = '\0';
-    return;
-  }
-  static constexpr char kMonths[][4] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-                                        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-  const time_t stamp = static_cast<time_t>(when);
-  struct tm parts{};
-  localtime_r(&stamp, &parts);
-  if (parts.tm_mon < 0 || parts.tm_mon > 11) {
-    out[0] = '\0';
-    return;
-  }
-  std::snprintf(out, size, "%d %s", parts.tm_mday, kMonths[parts.tm_mon]);
-}
+// A name is a filename, capped where the library caps one. KeyboardEntry's
+// maxLength counts BYTES, which is what this is.
+constexpr size_t kNameMax = 64;
+constexpr size_t kLineMax = 200;
 
 }  // namespace
 
@@ -50,715 +33,666 @@ std::unique_ptr<Activity> NotesActivity::create(GfxRenderer& renderer, MappedInp
   return makeUniqueNoThrow<NotesActivity>(renderer, mappedInput);
 }
 
-uint32_t NotesActivity::nowOrZero() {
-  const int64_t now = static_cast<int64_t>(std::time(nullptr));
-  return now > kClockFloor ? static_cast<uint32_t>(now) : 0u;
-}
-
-// --- Lifecycle -----------------------------------------------------------
-
 void NotesActivity::onEnter() {
   Activity::onEnter();
+  // The Toybox cuts are registered by the app that wants them rather than by
+  // main.cpp, so they cost no upstream surface. Without this every string on
+  // every screen asks for a face the renderer does not have and draws nothing
+  // at all -- not a box, not a fallback: nothing.
   toybox::ensureFonts(renderer);
-  store_.load();
-  phase_ = Phase::List;
-  listTop_ = 0;
-  LOG_INF("NOTES", "opened: %d notes", static_cast<int>(store_.notes().size()));
-  // Without this the app enters, loads, logs that it did, and draws NOTHING:
-  // the panel keeps showing the shelf it was opened from, and nothing in a
-  // build or a log says so. See docs/building-apps.md.
-  requestUpdate();
-}
 
-notes::Note* NotesActivity::currentNote() { return openId_ == 0 ? nullptr : store_.find(openId_); }
-
-void NotesActivity::save() {
-  // Every change, as it happens -- see decision 3 in the header. A failure is
-  // logged loudly rather than shown, because the only honest thing a dialog
-  // could say here is "your card did not take it", and the user is already
-  // looking at the note: it is still in memory and still on the screen, and
-  // the next edit tries again.
-  if (!store_.save()) LOG_ERR("NOTES", "the card refused the write; notes are unsaved");
-}
-
-void NotesActivity::showList() {
-  RenderLock lock(*this);
-  phase_ = Phase::List;
-  openId_ = 0;
-  itemEditMode_ = false;
-  bodyText_.clear();
-  topLine_ = 0;
-  lineCount_ = 0;
-}
-
-void NotesActivity::openNote(const uint32_t id) {
-  const notes::Note* note = store_.find(id);
-  if (note == nullptr) return;
-  {
-    RenderLock lock(*this);
-    openId_ = id;
-    itemEditMode_ = false;
-    itemTop_ = 0;
-    topLine_ = 0;
-    lineCount_ = 0;
-    phase_ = note->kind == notes::Kind::Text ? Phase::Text : Phase::Checklist;
+  if (!library_.begin()) {
+    showNotice("The card would not open, so nothing was changed.");
+    return;
   }
-  requestUpdate();
+  openDeck();
 }
 
-void NotesActivity::toggleItem(const int index) {
-  notes::Note* note = currentNote();
-  if (note == nullptr || index < 0 || index >= static_cast<int>(note->items.size())) return;
-  {
-    RenderLock lock(*this);
-    note->items[static_cast<size_t>(index)].done = !note->items[static_cast<size_t>(index)].done;
+// --- Rows ----------------------------------------------------------------
+
+void NotesActivity::rebuildRows() {
+  const std::vector<notes::Entry>& entries = library_.entries();
+  deckTallies_.clear();
+  deckTallies_.reserve(entries.size());
+  for (const notes::Entry& entry : entries) {
+    char tally[28];
+    std::snprintf(tally, sizeof(tally), "%d/%d", entry.done, entry.total);
+    deckTallies_.emplace_back(entry.hasTasks ? tally : "");
   }
-  store_.touchAndSave(openId_, nowOrZero());
-  requestUpdate();
-}
-
-void NotesActivity::turnPage(const int delta) {
-  if (visibleLines_ == 0 || lineCount_ == 0) return;
-  const uint32_t step = visibleLines_;
-  RenderLock lock(*this);
-  if (delta > 0) {
-    if (topLine_ + step >= lineCount_) return;  // already on the last page
-    topLine_ += step;
-  } else {
-    topLine_ = topLine_ > step ? topLine_ - step : 0;
+  // Pointers are taken in a SECOND pass. emplace_back can move every string it
+  // has already stored, so a c_str() taken during the first loop points into a
+  // buffer the vector has since freed.
+  deckRows_.clear();
+  deckRows_.reserve(entries.size());
+  for (size_t i = 0; i < entries.size(); i++) {
+    notesui::DeckItem row;
+    row.title = entries[i].name.c_str();
+    row.tally = deckTallies_[i].empty() ? nullptr : deckTallies_[i].c_str();
+    deckRows_.push_back(row);
   }
+
+  taskTexts_.clear();
+  rowLine_.clear();
+  taskTexts_.reserve(lines_.size());
+  rowLine_.reserve(lines_.size());
+  for (size_t i = 0; i < lines_.size(); i++) {
+    const notes::Line& line = lines_[i];
+    // NO BLANK ROWS, anywhere in the file. An empty line drawn as an item is an
+    // empty tick box: a hole in the list with nothing to tick and nothing to
+    // read, and Mario's own note had three of them. counts() already skips
+    // them, so drawing them made the tally disagree with the rows as well.
+    // The file keeps its blank lines; they are spacing, not things to do.
+    if (line.begin >= line.end) continue;
+    // Nor a marker with nothing after it. "- [x] " on its own is a ticked box
+    // with no text: still a hole in the list, and still something the file can
+    // legitimately contain.
+    std::string text = notes::textOf(doc_, line);
+    bool blank = true;
+    for (const char c : text) {
+      if (c != ' ' && c != '\t') {
+        blank = false;
+        break;
+      }
+    }
+    if (blank) continue;
+    rowLine_.push_back(i);
+    taskTexts_.push_back(std::move(text));
+  }
+  taskRows_.clear();
+  taskRows_.reserve(taskTexts_.size());
+  for (size_t i = 0; i < taskTexts_.size(); i++) {
+    notesui::Task row;
+    row.text = taskTexts_[i].c_str();
+    row.checked = lines_[rowLine_[i]].checked;
+    taskRows_.push_back(row);
+  }
+}
+
+bool NotesActivity::anyDone() const {
+  for (const notesui::Task& task : taskRows_) {
+    if (task.checked) return true;
+  }
+  return false;
+}
+
+int NotesActivity::deckPageSize() {
+  fui::GfxRendererTarget target = toybox::makeTarget(renderer);
+  notesui::DeckModel probe;
+  probe.items = deckRows_.data();
+  probe.count = static_cast<int>(deckRows_.size());
+  return notesui::deckCapacity(target, target.deviceContext(), probe);
+}
+
+int NotesActivity::notePageSize() {
+  fui::GfxRendererTarget target = toybox::makeTarget(renderer);
+  notesui::NoteModel probe;
+  probe.tasks = taskRows_.data();
+  probe.count = static_cast<int>(taskRows_.size());
+  return notesui::noteCapacity(target, target.deviceContext(), probe);
+}
+
+void NotesActivity::relabelDeck() {
+  const int page = deckPageSize();
+  const int count = static_cast<int>(deckRows_.size());
+  deckPage_.clear();
+  if (page <= 0 || count <= page) return;
+  char label[32];
+  std::snprintf(label, sizeof(label), "%d / %d", deckTop_ / page + 1, (count + page - 1) / page);
+  deckPage_ = label;
+}
+
+void NotesActivity::relabelNote() {
+  const int page = notePageSize();
+  const int count = static_cast<int>(taskRows_.size());
+  notePage_.clear();
+  if (page <= 0 || count <= page) return;
+  char label[32];
+  std::snprintf(label, sizeof(label), "%d / %d", noteTop_ / page + 1, (count + page - 1) / page);
+  notePage_ = label;
+}
+
+// --- Navigation ----------------------------------------------------------
+
+void NotesActivity::openDeck() {
+  view_ = View::Deck;
+  openName_.clear();
+  doc_.clear();
+  lines_.clear();
+  deckTop_ = 0;
+  // Re-read on every entry. The card can be edited from a computer between
+  // sessions, and an app that trusts a cached list offers notes that are not
+  // there any more.
+  library_.scan();
+  rebuildRows();
+  relabelDeck();
+  interactionsReady_ = false;
   requestUpdate();
 }
 
-void NotesActivity::pageList(const int delta) {
-  const int count = static_cast<int>(rowIds_.size());
-  if (count == 0 || listVisible_ <= 0) return;
-  const int pages = (count + listVisible_ - 1) / listVisible_;
-  const int page = listTop_ / listVisible_;
-  // Wraps: a page key that stops working at the last page reads as broken.
-  listTop_ = ((page + (delta > 0 ? 1 : pages - 1)) % pages) * listVisible_;
+void NotesActivity::reloadNote() {
+  doc_.clear();
+  library_.load(openName_, doc_);
+  lines_ = notes::parse(doc_);
+  rebuildRows();
+  const int count = static_cast<int>(taskRows_.size());
+  if (noteTop_ >= count) noteTop_ = 0;
+  relabelNote();
+}
+
+void NotesActivity::openNote(const int index) {
+  if (index < 0 || index >= library_.count()) return;
+  openName_ = library_.entries()[index].name;
+  noteTop_ = 0;
+  reloadNote();
+  view_ = View::Note;
+  interactionsReady_ = false;
   requestUpdate();
 }
 
-// --- Typing --------------------------------------------------------------
+void NotesActivity::showNotice(const std::string& text) {
+  notice_ = text;
+  view_ = View::Notice;
+  interactionsReady_ = false;
+  requestUpdate();
+}
 
-void NotesActivity::edit(const Editing what, const char* title, const std::string& initial, const size_t maxChars,
-                         const bool deletable) {
-  auto keyboard =
-      makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, title, initial, maxChars, InputType::Text);
+// --- Edits ---------------------------------------------------------------
+
+void NotesActivity::toggleTask(const int index) {
+  if (index < 0 || index >= static_cast<int>(taskRows_.size())) return;
+  // A ROW IS NOT A LINE any more: blank lines are skipped when the rows are
+  // built, so row 4 can be line 6. Ticking by row index would tick a different
+  // line than the one under the finger.
+  const size_t line = rowLine_[static_cast<size_t>(index)];
+  const std::string before = doc_;
+  if (!notes::toggle(doc_, lines_[line])) {
+    // A line written on a computer without the marker. Ticking it is how it
+    // becomes one, rather than the app carrying a second kind of line forever.
+    doc_.insert(lines_[line].begin, "- [x] ");
+    lines_ = notes::parse(doc_);
+  }
+
+  // Written NOW, not on the way out. A tick a person saw and the card did not
+  // is the failure mode of every app that saves on exit, and this one is used
+  // one-handed in a shop with the power button under a thumb.
+  std::string message;
+  if (!library_.save(openName_, doc_, message)) {
+    doc_ = before;  // the file is the truth; take back what RAM claimed
+    lines_ = notes::parse(doc_);
+    rebuildRows();
+    showNotice(message);
+    return;
+  }
+  rebuildRows();
+  requestUpdate();
+}
+
+void NotesActivity::clearDone() {
+  if (!anyDone()) return;
+  const std::string before = doc_;
+  notes::clearChecked(doc_);
+  std::string message;
+  if (!library_.save(openName_, doc_, message)) {
+    doc_ = before;  // the file is the truth; take back what RAM claimed
+    lines_ = notes::parse(doc_);
+    rebuildRows();
+    showNotice(message);
+    return;
+  }
+  noteTop_ = 0;
+  reloadNote();
+  view_ = View::Note;
+  interactionsReady_ = false;
+  requestUpdate();
+}
+
+bool NotesActivity::nameFitsBand(const std::string& name) {
+  fui::GfxRendererTarget target = toybox::makeTarget(renderer);
+  fui::TextStyle style;
+  style.font = toybox::kBodyFont;
+  const int16_t room = static_cast<int16_t>(target.deviceContext().width - 2 * toybox::kMargin - toybox::kHeaderHeight);
+  return target.measureText(style.font, name.c_str(), style).width <= room;
+}
+
+void NotesActivity::askNewName() {
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, "NAME THIS NOTE", "", kNameMax);
   if (!keyboard) {
-    LOG_ERR("NOTES", "OOM: keyboard");
+    showNotice("There was not enough memory to open the keyboard.");
     return;
   }
-  // The one way to delete anything in this app. It finishes the keyboard with
-  // headerAction set and the typed text preserved, so a tap on it that was
-  // meant for a letter still has somewhere to go back to: the confirm's KEEP
-  // IT returns to the note with the edit NOT applied, which is the same place
-  // Back would have gone.
-  if (deletable) keyboard->setHeaderAction(fui::bitmapFromIcon(icon_notes_trash_32));
-  editing_ = what;
-  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) { onKeyboardResult(result); });
-}
-
-void NotesActivity::onKeyboardResult(const ActivityResult& result) {
-  const Editing what = editing_;
-  editing_ = Editing::None;
-  const int item = editItem_;
-  editItem_ = -1;
-
-  if (result.isCancelled) {
-    // A cancelled NEW note is not a note. Nothing was created, so there is
-    // nothing to clean up -- which is the reason creation waits for the
-    // keyboard to come back rather than making an empty note first.
-    requestUpdate();
-    return;
-  }
-
-  const auto& typed = std::get<KeyboardResult>(result.data);
-  if (typed.headerAction) {
-    switch (what) {
-      case Editing::Body:
-      case Editing::ListName:
-        askDelete(Target::Note, -1);
-        return;
-      case Editing::ItemText:
-        askDelete(Target::Item, item);
-        return;
-      default:
-        // A thing that does not exist yet has no delete button, so this is
-        // unreachable; falling through to "nothing happened" is still the
-        // right answer if it ever becomes reachable.
-        requestUpdate();
-        return;
-    }
-  }
-
-  const uint32_t now = nowOrZero();
-
-  switch (what) {
-    case Editing::NewText: {
-      const std::string body = notes::sanitize(typed.text, notes::kMaxBodyChars);
-      // An empty note is not created. Somebody who opened the keyboard, typed
-      // nothing and pressed OK has made no note, and a row called UNTITLED
-      // with nothing in it is litter they then have to delete.
-      if (body.empty()) {
-        showList();
-        break;
-      }
-      if (store_.notes().size() >= notes::kMaxNotes) {
-        LOG_ERR("NOTES", "at the %d-note cap; not creating another", static_cast<int>(notes::kMaxNotes));
-        showList();
-        break;
-      }
-      notes::Note& note = store_.create(notes::Kind::Text);
-      note.body = body;
-      const uint32_t id = note.id;
-      store_.touchAndSave(id, now);
-      openNote(id);
+  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) {
+    interactionsReady_ = false;
+    if (result.isCancelled) {
+      requestUpdate();
       return;
     }
-    case Editing::Body: {
-      notes::Note* note = currentNote();
-      if (note == nullptr) break;
-      {
-        RenderLock lock(*this);
-        note->body = notes::sanitize(typed.text, notes::kMaxBodyChars);
-        // The edit may have changed the title line, which changes how long the
-        // note is and where its pages fall. Back to the top rather than to a
-        // line number that meant something about the previous text.
-        topLine_ = 0;
-        lineCount_ = 0;
-      }
-      store_.touchAndSave(openId_, now);
-      break;
-    }
-    case Editing::NewList: {
-      const std::string name = notes::sanitize(typed.text, notes::kMaxTitleChars);
-      if (name.empty()) {
-        showList();
-        break;
-      }
-      if (store_.notes().size() >= notes::kMaxNotes) {
-        LOG_ERR("NOTES", "at the %d-note cap; not creating another", static_cast<int>(notes::kMaxNotes));
-        showList();
-        break;
-      }
-      notes::Note& note = store_.create(notes::Kind::Checklist);
-      note.name = name;
-      const uint32_t id = note.id;
-      store_.touchAndSave(id, now);
-      openNote(id);
+    const auto& entered = std::get<KeyboardResult>(result.data);
+    // Refused HERE rather than silently shrinking the title bar later. The band
+    // is chrome and carries one cut; a name that does not fit it is a name this
+    // app will not make.
+    if (!nameFitsBand(notes::Library::sanitise(entered.text))) {
+      showNotice("That name is too long to fit the title bar. Try a shorter one.");
       return;
     }
-    case Editing::ListName: {
-      notes::Note* note = currentNote();
-      if (note == nullptr) break;
-      const std::string name = notes::sanitize(typed.text, notes::kMaxTitleChars);
-      // An empty name is refused rather than stored: displayTitle() would show
-      // UNTITLED and the export would be renamed to match, which is a lot of
-      // consequence for a keystroke.
-      if (!name.empty()) {
-        RenderLock lock(*this);
-        note->name = name;
-      }
-      store_.touchAndSave(openId_, now);
-      break;
+    std::string message;
+    if (!library_.create(entered.text, message)) {
+      showNotice(message);
+      return;
     }
-    case Editing::NewItem: {
-      notes::Note* note = currentNote();
-      if (note == nullptr) break;
-      const std::string text = notes::sanitize(typed.text, notes::kMaxItemChars);
-      if (text.empty()) break;
-      if (note->items.size() >= notes::kMaxItems) {
-        LOG_ERR("NOTES", "at the %d-item cap; not adding another", static_cast<int>(notes::kMaxItems));
-        break;
-      }
-      {
-        RenderLock lock(*this);
-        note->items.push_back(notes::Item{text, false});
-        // A new item goes on the end, so show the end: adding something and
-        // being left looking at a page that does not contain it reads as the
-        // add having failed.
-        itemTop_ = itemVisible_ > 0 ? (static_cast<int>(note->items.size()) - 1) / itemVisible_ * itemVisible_ : 0;
-      }
-      store_.touchAndSave(openId_, now);
-      break;
-    }
-    case Editing::ItemText: {
-      notes::Note* note = currentNote();
-      if (note == nullptr || item < 0 || item >= static_cast<int>(note->items.size())) break;
-      const std::string text = notes::sanitize(typed.text, notes::kMaxItemChars);
-      // Emptying an item is a delete by another name, and it goes through the
-      // same confirm rather than happening because a backspace was held.
-      if (text.empty()) {
-        askDelete(Target::Item, item);
+    // Straight into the note that was just made. Naming one and then having to
+    // find it in the deck is a step nobody asked for.
+    const std::string made = notes::Library::sanitise(entered.text);
+    rebuildRows();
+    for (int i = 0; i < library_.count(); i++) {
+      if (library_.entries()[i].name == made) {
+        openNote(i);
         return;
       }
-      {
-        RenderLock lock(*this);
-        note->items[static_cast<size_t>(item)].text = text;
-      }
-      store_.touchAndSave(openId_, now);
-      break;
     }
-    case Editing::None:
-      break;
+    openDeck();
+  });
+}
+
+void NotesActivity::askRename() {
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, "RENAME", openName_, kNameMax);
+  if (!keyboard) {
+    showNotice("There was not enough memory to open the keyboard.");
+    return;
   }
+  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) {
+    interactionsReady_ = false;
+    if (result.isCancelled) {
+      view_ = View::Note;
+      requestUpdate();
+      return;
+    }
+    const auto& entered = std::get<KeyboardResult>(result.data);
+    if (!nameFitsBand(notes::Library::sanitise(entered.text))) {
+      showNotice("That name is too long to fit the title bar. Try a shorter one.");
+      return;
+    }
+    std::string message;
+    if (!library_.rename(openName_, entered.text, message)) {
+      showNotice(message);
+      return;
+    }
+    openName_ = notes::Library::sanitise(entered.text);
+    reloadNote();
+    view_ = View::Note;
+    requestUpdate();
+  });
+}
+
+void NotesActivity::askLine() {
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, "ADD A LINE", "", kLineMax);
+  if (!keyboard) {
+    showNotice("There was not enough memory to open the keyboard.");
+    return;
+  }
+  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) {
+    interactionsReady_ = false;
+    if (result.isCancelled) {
+      view_ = View::Note;
+      requestUpdate();
+      return;
+    }
+    const auto& entered = std::get<KeyboardResult>(result.data);
+    if (entered.text.empty()) {
+      view_ = View::Note;
+      requestUpdate();
+      return;
+    }
+
+    // Added as a TASK, always. The keyboard cannot type a newline, so a line
+    // added here is one line; and this app's reason to exist is a list you
+    // tick. Somebody who wanted prose writes it from a computer, while
+    // somebody who wanted a task and got prose has no way to make it tickable
+    // on the device at all.
+    const std::string before = doc_;
+    if (!doc_.empty() && doc_.back() != '\n') doc_.push_back('\n');
+    doc_ += "- [ ] ";
+    doc_ += entered.text;
+    doc_.push_back('\n');
+
+    std::string message;
+    if (!library_.save(openName_, doc_, message)) {
+      doc_ = before;
+      lines_ = notes::parse(doc_);
+      rebuildRows();
+      showNotice(message);
+      return;
+    }
+    reloadNote();
+    // Onto the page the new line landed on, so a line added to a long list is
+    // visibly there rather than two pages away.
+    const int page = notePageSize();
+    const int count = static_cast<int>(taskRows_.size());
+    if (page > 0 && count > 0) noteTop_ = ((count - 1) / page) * page;
+    relabelNote();
+    view_ = View::Note;
+    // STRAIGHT BACK TO THE KEYBOARD. A list is made of several things, and the
+    // way out is Back or an empty line. One visit per item cost two activity
+    // transitions and two full-screen repaints EACH -- six repaints to write a
+    // three-line shopping list, with the keyboard torn down and rebuilt between
+    // every word.
+    askLine();
+  });
+}
+
+// --- Typing from a phone -------------------------------------------------
+
+void NotesActivity::startPhone() {
+#ifndef SIMULATOR
+  // NEVER launch the picker unconditionally: WifiSelectionActivity::startWifiScan
+  // calls WiFi.disconnect() on every path, so an unguarded launch drops a
+  // working association and shows a redundant chooser. Four other apps guard it
+  // exactly this way.
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.mode(WIFI_STA);
+    startActivityForResult(makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput),
+                           [this](const ActivityResult& result) {
+                             if (result.isCancelled || WiFi.status() != WL_CONNECTED) {
+                               showNotice("Typing on your phone needs Wi-Fi. Nothing changed.");
+                               return;
+                             }
+                             startPhone();
+                           });
+    return;
+  }
+#endif
+
+  // Developer Mode holds 80, 81 and UDP 8134 for as long as its toggle is on,
+  // and Mario keeps a device on it. Two binds on one port fail in a way that
+  // reads as "the screen is broken", so dev mode yields while this screen is up.
+  // Every failure below leaves through stopPhone(), so the yield is released in
+  // exactly ONE place no matter which way this goes wrong.
+  devmode::pause();
+  devPaused_ = true;
+
+  server_ = makeUniqueNoThrow<CrossPointWebServer>(CrossPointWebServer::Surface::NotesOnly);
+  if (!server_) {
+    stopPhone();
+    showNotice("There was not enough memory to start.");
+    return;
+  }
+  server_->setNotesFile(std::string("/notes/") + openName_ + ".md", openName_);
+  server_->begin();
+  // The simulator has no networking shim, so begin() never leaves the server
+  // running there. The SCREEN is still drawn, because its layout is the half
+  // that can be checked without hardware; what cannot be checked on a laptop is
+  // said out loud in the commit rather than assumed.
+#ifndef SIMULATOR
+  if (!server_->isRunning()) {
+    stopPhone();
+    showNotice("The reader could not open its web server. Try again in a moment.");
+    return;
+  }
+#endif
+
+#ifdef SIMULATOR
+  // No radio here, so no name and no address to read off one. The screen is
+  // still worth drawing: its layout is the half that can be checked without
+  // hardware, and the server underneath it really does serve on the host.
+  const bool mdnsUp = false;
+  const std::string dotted = "127.0.0.1";
+#else
+  MDNS.end();
+  const bool mdnsUp = MDNS.begin(devicehost::mdnsName());
+  const std::string dotted = std::string(WiFi.localIP().toString().c_str());
+#endif
+  // THE CODE CARRIES THE ADDRESS, ALWAYS. It is generated from WiFi.localIP()
+  // at the moment of drawing and depends on no service, so the only way it can
+  // be wrong is DHCP moving this reader between the paint and the scan. The
+  // NAME depends on a responder that can fail to start -- and this function
+  // already knows when it has -- so encoding that would put a detected fault
+  // into the one element a person cannot read.
+  phoneUrl_ = "http://" + dotted + "/n";
+#ifdef SIMULATOR
+  phoneReadable_ = phoneUrl_;
+  (void)mdnsUp;
+#else
+  phoneReadable_ = mdnsUp ? std::string("http://") + devicehost::mdnsName() + ".local/n" : phoneUrl_;
+#endif
+  phoneSaved_ = false;
+  view_ = View::Phone;
+  interactionsReady_ = false;
   requestUpdate();
 }
 
-// --- Deleting ------------------------------------------------------------
-
-void NotesActivity::askDelete(const Target target, const int item) {
-  const notes::Note* note = currentNote();
-  if (note == nullptr) {
-    showList();
-    requestUpdate();
-    return;
+void NotesActivity::stopPhone() {
+  if (server_) {
+    server_->stop();
+    server_.reset();
+#ifndef SIMULATOR
+    MDNS.end();
+#endif
   }
-  {
-    RenderLock lock(*this);
-    target_ = target;
-    targetItem_ = item;
-    if (target == Target::Item && item >= 0 && item < static_cast<int>(note->items.size())) {
-      confirmTitle_ = note->items[static_cast<size_t>(item)].text;
-      std::snprintf(confirmDetail_, sizeof(confirmDetail_), "One item off this list.");
-    } else {
-      confirmTitle_ = notes::displayTitle(*note);
-      if (note->kind == notes::Kind::Checklist) {
-        std::snprintf(confirmDetail_, sizeof(confirmDetail_), "%d items. This cannot be undone.",
-                      static_cast<int>(note->items.size()));
-      } else {
-        std::snprintf(confirmDetail_, sizeof(confirmDetail_), "%d characters. This cannot be undone.",
-                      static_cast<int>(note->body.size()));
-      }
-    }
-    phase_ = Phase::Confirm;
+  // Guarded by the flag rather than by whether a server exists: the
+  // out-of-memory path never got one, and resuming a yield this screen does not
+  // hold drops the count out from under whoever does.
+  if (devPaused_) {
+    devPaused_ = false;
+    devmode::resume();
   }
-  requestUpdate();
 }
 
-void NotesActivity::performDelete() {
-  notes::Note* note = currentNote();
-  if (note == nullptr) {
-    showList();
-    requestUpdate();
-    return;
-  }
-  if (target_ == Target::Item) {
-    if (targetItem_ >= 0 && targetItem_ < static_cast<int>(note->items.size())) {
-      RenderLock lock(*this);
-      note->items.erase(note->items.begin() + targetItem_);
-      // The page the deleted item was on may no longer exist.
-      if (itemVisible_ > 0 && itemTop_ >= static_cast<int>(note->items.size())) {
-        itemTop_ = itemTop_ >= itemVisible_ ? itemTop_ - itemVisible_ : 0;
-      }
-      phase_ = Phase::Checklist;
-    }
-    target_ = Target::None;
-    targetItem_ = -1;
-    store_.touchAndSave(openId_, nowOrZero());
-    requestUpdate();
-    return;
-  }
-
-  // The whole note, and its export with it.
-  const uint32_t id = openId_;
-  target_ = Target::None;
-  targetItem_ = -1;
-  store_.remove(id);
-  save();
-  showList();
-  requestUpdate();
+void NotesActivity::onExit() {
+  stopPhone();
+  Activity::onExit();
 }
 
 // --- Input ---------------------------------------------------------------
 
 void NotesActivity::loop() {
-  // An app never names where Back goes; the shelf puts it back in whichever
-  // folder opened it. The global back-swipe gesture arrives as Button::Back
-  // too, and on the X4 Pro it is the ONLY way out -- the board has no Back key.
+  // Back is read on the per-frame path, above any "return unless a tap
+  // arrived" guard, because the global back-swipe arrives as Button::Back and a
+  // swipe is not a tap. host-tests/backgesture enforces this fork-wide.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    switch (phase_) {
-      case Phase::List:
+    switch (view_) {
+      case View::Deck:
+        // An app never names where Back goes; the shelf puts it back in
+        // whichever folder opened it.
         shelf::leave(renderer, mappedInput);
         return;
-      case Phase::KindPick:
-        showList();
-        break;
-      case Phase::Text:
-        showList();
-        break;
-      case Phase::Checklist:
-        // Back out of the mode first, then out of the list. A mode Back
-        // escapes in one step is a mode people leave by accident.
-        if (itemEditMode_) {
-          RenderLock lock(*this);
-          itemEditMode_ = false;
-        } else {
-          showList();
-        }
-        break;
-      case Phase::Confirm:
-        // Back is the safe answer to "delete?", exactly like KEEP IT.
-        {
-          RenderLock lock(*this);
-          target_ = Target::None;
-          targetItem_ = -1;
-          phase_ = openId_ == 0
-                       ? Phase::List
-                       : (currentNote() != nullptr && currentNote()->kind == notes::Kind::Text ? Phase::Text
-                                                                                               : Phase::Checklist);
-        }
-        break;
+      case View::Note:
+        openDeck();
+        return;
+      case View::Phone:
+        stopPhone();
+        view_ = View::Note;
+        interactionsReady_ = false;
+        requestUpdate();
+        return;
+      case View::Menu:
+      case View::Confirm:
+      case View::Notice:
+        view_ = openName_.empty() ? View::Deck : View::Note;
+        interactionsReady_ = false;
+        requestUpdate();
+        return;
     }
-    requestUpdate();
-    return;
   }
 
-  // The two side keys page whatever is paged. They are the device's only
-  // physical buttons; a row cursor would need Confirm, which is an unassigned
-  // pin on the X4 Pro and never fires. See docs/buttons.md.
-  const bool next = mappedInput.wasReleased(MappedInputManager::Button::Down);
-  const bool prev = mappedInput.wasReleased(MappedInputManager::Button::Up);
-  if (next || prev) {
-    switch (phase_) {
-      case Phase::List:
-        pageList(next ? 1 : -1);
-        return;
-      case Phase::Text:
-        turnPage(next ? 1 : -1);
-        return;
-      case Phase::Checklist: {
-        const notes::Note* note = currentNote();
-        if (note == nullptr || itemVisible_ <= 0) return;
-        const int count = static_cast<int>(note->items.size());
-        if (count <= itemVisible_) return;
-        const int pages = (count + itemVisible_ - 1) / itemVisible_;
-        const int page = itemTop_ / itemVisible_;
-        itemTop_ = ((page + (next ? 1 : pages - 1)) % pages) * itemVisible_;
+  // Paging is the two physical keys. They are the only buttons this device has
+  // and vertical paging is what they do everywhere else in the fork.
+  const bool down = mappedInput.wasReleased(MappedInputManager::Button::Down);
+  const bool up = mappedInput.wasReleased(MappedInputManager::Button::Up);
+  if (down || up) {
+    if (view_ == View::Deck) {
+      const int page = deckPageSize();
+      const int count = static_cast<int>(deckRows_.size());
+      const int next = down ? deckTop_ + page : deckTop_ - page;
+      if (page > 0 && count > page && next >= 0 && next < count) {
+        deckTop_ = next;
+        relabelDeck();
+        interactionsReady_ = false;
+        requestUpdate();
+      }
+      return;
+    }
+    if (view_ == View::Note) {
+      const int page = notePageSize();
+      const int count = static_cast<int>(taskRows_.size());
+      const int next = down ? noteTop_ + page : noteTop_ - page;
+      if (page > 0 && count > page && next >= 0 && next < count) {
+        noteTop_ = next;
+        relabelNote();
+        interactionsReady_ = false;
+        requestUpdate();
+      }
+      return;
+    }
+  }
+
+  if (server_ && server_->isRunning()) {
+    // Pumped from loop() rather than a task: there are no background threads in
+    // this firmware, and a blocking handler on the render path is what makes a
+    // screen look frozen.
+    for (int i = 0; i < 8 && server_->isRunning(); ++i) server_->handleClient();
+    if (server_->takeNotesChanged()) {
+      reloadNote();
+      phoneSaved_ = true;
+      interactionsReady_ = false;
+      requestUpdate();
+    }
+  }
+
+  int x = 0;
+  int y = 0;
+  // Interactions::route() refuses a tap routed against a table the panel has
+  // not shown yet, which is what stops a tap aimed at the screen underneath
+  // from landing on the one that replaced it during a 0.3-2s repaint.
+  if (!mappedInput.wasScreenTapped(x, y) || !interactionsReady_) return;
+  fui::InputSnapshot input{};
+  input.touchReleased = true;
+  input.touchX = static_cast<int16_t>(x);
+  input.touchY = static_cast<int16_t>(y);
+  const fui::ActionEvent action = interactions_.route(input);
+
+  switch (action.action) {
+    case notesui::ActionOpenNote:
+      openNote(action.value);
+      return;
+    case notesui::ActionNewNote:
+      askNewName();
+      return;
+    case notesui::ActionToggleTask:
+      toggleTask(action.value);
+      return;
+    case notesui::ActionAddLine:
+      askLine();
+      return;
+    case notesui::ActionMenu:
+      if (openName_.empty()) return;
+      view_ = View::Menu;
+      interactionsReady_ = false;
+      requestUpdate();
+      return;
+    case notesui::ActionClearDone:
+      clearDone();
+      return;
+    case notesui::ActionRename:
+      askRename();
+      return;
+    case notesui::ActionUsePhone:
+      startPhone();
+      return;
+    case notesui::ActionDelete:
+      // On the menu this OPENS the confirm; on the confirm it does the thing.
+      // One action id for both, because the confirm's own DELETE IT is the
+      // only control that may destroy a note and it lives on a screen the
+      // person had to arrive at deliberately.
+      if (view_ == View::Menu) {
+        view_ = View::Confirm;
+        interactionsReady_ = false;
         requestUpdate();
         return;
       }
-      default:
-        return;
-    }
-  }
-
-  int tapX = 0;
-  int tapY = 0;
-  if (!mappedInput.wasScreenTapped(tapX, tapY) || !interactionsReady_) return;
-
-  // A tap that arrives within kSettleMs of this screen appearing is answering
-  // the PREVIOUS screen -- see the note beside kSettleMs. Dropped rather than
-  // queued: re-routing it once the window closes would still act on something
-  // the user had not read.
-  if (everShown_ && millis() - phaseShownAtMs_ < kSettleMs) return;
-
-  fui::InputSnapshot input;
-  input.touchReleased = true;
-  input.touchX = static_cast<int16_t>(tapX);
-  input.touchY = static_cast<int16_t>(tapY);
-  const fui::ActionEvent event = interactions_.route(input);
-
-  switch (event.action) {
-    case notesui::ActionOpenNote:
-      if (event.value >= 0 && event.value < static_cast<int>(rowIds_.size())) {
-        openNote(rowIds_[static_cast<size_t>(event.value)]);
-      }
-      break;
-    case notesui::ActionNewNote: {
-      RenderLock lock(*this);
-      phase_ = Phase::KindPick;
+      library_.remove(openName_);
+      openDeck();
+      return;
+    case notesui::ActionDismiss:
+      stopPhone();
+      view_ = openName_.empty() ? View::Deck : View::Note;
+      interactionsReady_ = false;
       requestUpdate();
-      break;
-    }
-    case notesui::ActionKindText:
-      edit(Editing::NewText, "NEW NOTE", "", notes::kMaxBodyChars, false);
-      break;
-    case notesui::ActionKindChecklist:
-      edit(Editing::NewList, "LIST NAME", "", notes::kMaxTitleChars, false);
-      break;
-    case notesui::ActionEditBody: {
-      const notes::Note* note = currentNote();
-      if (note != nullptr) edit(Editing::Body, "EDIT NOTE", note->body, notes::kMaxBodyChars, true);
-      break;
-    }
-    case notesui::ActionToggleItem:
-      toggleItem(event.value);
-      break;
-    case notesui::ActionAddItem:
-      edit(Editing::NewItem, "NEW ITEM", "", notes::kMaxItemChars, false);
-      break;
-    case notesui::ActionEditMode: {
-      RenderLock lock(*this);
-      itemEditMode_ = true;
-      requestUpdate();
-      break;
-    }
-    case notesui::ActionDoneEditing: {
-      RenderLock lock(*this);
-      itemEditMode_ = false;
-      requestUpdate();
-      break;
-    }
-    case notesui::ActionEditItem: {
-      const notes::Note* note = currentNote();
-      if (note == nullptr || event.value < 0 || event.value >= static_cast<int>(note->items.size())) break;
-      editItem_ = event.value;
-      edit(Editing::ItemText, "EDIT ITEM", note->items[static_cast<size_t>(event.value)].text, notes::kMaxItemChars,
-           true);
-      break;
-    }
-    case notesui::ActionRenameList: {
-      const notes::Note* note = currentNote();
-      if (note != nullptr) edit(Editing::ListName, "LIST NAME", note->name, notes::kMaxTitleChars, true);
-      break;
-    }
-    case notesui::ActionPagePrev:
-      turnPage(-1);
-      break;
-    case notesui::ActionPageNext:
-      turnPage(1);
-      break;
-    case notesui::ActionDeleteConfirm:
-      performDelete();
-      break;
-    case notesui::ActionDeleteCancel: {
-      const notes::Note* note = currentNote();
-      RenderLock lock(*this);
-      target_ = Target::None;
-      targetItem_ = -1;
-      phase_ = note == nullptr ? Phase::List : (note->kind == notes::Kind::Text ? Phase::Text : Phase::Checklist);
-      requestUpdate();
-      break;
-    }
+      return;
     default:
-      break;
+      return;
   }
 }
 
-// --- Drawing -------------------------------------------------------------
+// --- Render --------------------------------------------------------------
 
 void NotesActivity::render(RenderLock&&) {
   renderer.clearScreen();
-  // The reading cut in the body slot. This app is words somebody wrote, not a
-  // board, so it is set in the reading face the way the readers are.
-  fui::GfxRendererTarget target = toybox::makeTarget(renderer, toybox::readingFaces());
-  const fui::DeviceContext device = target.deviceContext();
-  const fui::ThemeTokens& tokens = toybox::themeTokens();
+  fui::GfxRendererTarget target = toybox::makeTarget(renderer);
   const fui::InputSnapshot noInput{};
   interactionsReady_ = false;
-  toybox::Frame frame(target, device, noInput, interactions_);
+  toybox::Frame frame(target, target.deviceContext(), noInput, interactions_);
   toybox::Screen screen(frame);
 
-  const char* what = "Notes";
-
-  switch (phase_) {
-    case Phase::List: {
-      const std::vector<notes::Note>& all = store_.notes();
-      rowIds_.clear();
-      rowLabels_.clear();
-      rowSubtitles_.clear();
-      rows_.clear();
-
-      const int16_t rowHeight = notesui::listRowHeight(target, tokens);
-      listVisible_ = fui::listVisibleRows(notesui::listBand(device), rowHeight, tokens.listRowGap);
-      if (listVisible_ <= 0) listVisible_ = 1;
-      const int count = static_cast<int>(all.size());
-      if (listTop_ >= count) listTop_ = 0;
-      const int shown = count - listTop_ < listVisible_ ? count - listTop_ : listVisible_;
-
-      fui::TextStyle titleStyle = tokens.bodyText;
-      titleStyle.maxLines = 1;
-      const int16_t titleWidth = notesui::listTitleWidth(device, tokens);
-      rowIds_.reserve(static_cast<size_t>(shown > 0 ? shown : 0));
-      rowLabels_.reserve(static_cast<size_t>(shown > 0 ? shown : 0));
-      rowSubtitles_.reserve(static_cast<size_t>(shown > 0 ? shown : 0));
-      for (int i = 0; i < shown; ++i) {
-        const notes::Note& note = all[static_cast<size_t>(listTop_ + i)];
-        rowIds_.push_back(note.id);
-        rowLabels_.push_back(toybox::fitLines(target, notes::displayTitle(note).c_str(), titleWidth, 1, titleStyle));
-        char date[16];
-        formatDate(note.updated, date, sizeof(date));
-        char subtitle[48];
-        if (note.kind == notes::Kind::Checklist) {
-          std::snprintf(subtitle, sizeof(subtitle), "%d OF %d DONE%s%s", notes::doneCount(note),
-                        static_cast<int>(note.items.size()), date[0] != '\0' ? "  .  " : "", date);
-        } else {
-          std::snprintf(subtitle, sizeof(subtitle), "NOTE%s%s", date[0] != '\0' ? "  .  " : "", date);
-        }
-        rowSubtitles_.push_back(subtitle);
-      }
-      // A second pass, because a push_back can reallocate and ListItem holds
-      // pointers rather than copies.
-      rows_.reserve(rowLabels_.size());
-      for (size_t i = 0; i < rowLabels_.size(); ++i) {
-        fui::ListItem row;
-        row.label = rowLabels_[i].c_str();
-        row.subtitle = rowSubtitles_[i].c_str();
-        // The index into rowIds_, which holds THIS PAGE. Both are rebuilt
-        // together in this loop, so a tap resolves to the note on the row that
-        // was drawn -- never to the note that would be there on page one.
-        row.actionValue = static_cast<int16_t>(i);
-        rows_.push_back(row);
-      }
-
-      if (count > 0) {
-        std::snprintf(countLabel_, sizeof(countLabel_), "%d", count);
-      } else {
-        countLabel_[0] = '\0';
-      }
-
-      notesui::ListModel model;
-      model.items = rows_.empty() ? nullptr : rows_.data();
-      model.count = static_cast<int>(rows_.size());
-      model.topIndex = 0;  // the model is handed a PAGE, never the whole list
-      model.countLabel = countLabel_[0] != '\0' ? countLabel_ : nullptr;
-      notesui::buildList(screen, model);
-      what = "Notes list";
+  switch (view_) {
+    case View::Deck: {
+      notesui::DeckModel model;
+      model.items = deckRows_.data();
+      model.count = static_cast<int>(deckRows_.size());
+      model.firstVisible = deckTop_;
+      model.pageLabel = deckPage_.empty() ? nullptr : deckPage_.c_str();
+      notesui::buildDeck(screen, model);
       break;
     }
-
-    case Phase::KindPick:
-      notesui::buildKindPick(screen);
-      what = "Notes kind";
-      break;
-
-    case Phase::Text: {
-      const notes::Note* note = currentNote();
-      if (note == nullptr) {
-        phase_ = Phase::List;
-        break;
-      }
-      bandTitle_ = notes::displayTitle(*note);
-      bodyText_ = notes::displayBody(*note);
-
-      const fui::Rect body = notesui::textBodyRect(device);
-      const int16_t lineHeight = target.lineHeight(tokens.bodyText.font);
-      visibleLines_ = fui::textAreaVisibleLines(body, lineHeight);
-
-      notesui::TextBody text;
-      text.text = bodyText_.c_str();
-      text.style = tokens.bodyText;
-      text.wrap = &wrap_;
-      const uint32_t measured = notesui::textLineCount(target, device, text);
-      lineCount_ = measured;
-
-      // Clamped here rather than where the page was turned, because the count
-      // does not exist until something has measured the text -- and an edit
-      // can make a note shorter than the page somebody was on.
-      if (visibleLines_ > 0 && topLine_ >= lineCount_ && lineCount_ > 0) {
-        topLine_ = (lineCount_ - 1) / visibleLines_ * visibleLines_;
-      }
-
-      notesui::TextModel model;
-      model.title = bandTitle_.c_str();
-      model.topLine = topLine_;
-      model.empty = bodyText_.empty();
-      if (visibleLines_ > 0 && lineCount_ > visibleLines_) {
-        const unsigned long page = topLine_ / visibleLines_ + 1;
-        const unsigned long pages = (lineCount_ + visibleLines_ - 1) / visibleLines_;
-        std::snprintf(pageLabel_, sizeof(pageLabel_), "%lu / %lu", page, pages);
-        model.pageLabel = pageLabel_;
-        model.canPagePrev = topLine_ > 0;
-        model.canPageNext = topLine_ + visibleLines_ < lineCount_;
-      }
-      const uint32_t drawn = notesui::buildText(screen, model, text);
-      // Take the count the panel was really drawn from; see buildText.
-      if (drawn > 0) lineCount_ = drawn;
-      what = "Notes text";
+    case View::Note: {
+      notesui::NoteModel model;
+      model.title = openName_.c_str();
+      model.tasks = taskRows_.data();
+      model.count = static_cast<int>(taskRows_.size());
+      model.firstVisible = noteTop_;
+      model.pageLabel = notePage_.empty() ? nullptr : notePage_.c_str();
+      model.menuIcon = &icon_go_settings_32;
+      model.anyDone = anyDone();
+      notesui::buildNote(screen, model);
       break;
     }
-
-    case Phase::Checklist: {
-      const notes::Note* note = currentNote();
-      if (note == nullptr) {
-        phase_ = Phase::List;
-        break;
-      }
-      bandTitle_ = notes::displayTitle(*note);
-
-      const int16_t rowHeight = notesui::checklistRowHeight(tokens);
-      const fui::Rect band = notesui::checklistBand(device);
-      itemVisible_ = rowHeight > 0 ? band.height / rowHeight : 0;
-      if (itemVisible_ <= 0) itemVisible_ = 1;
-
-      const int count = static_cast<int>(note->items.size());
-      if (itemTop_ >= count) itemTop_ = 0;
-      const int shown = count - itemTop_ < itemVisible_ ? count - itemTop_ : itemVisible_;
-
-      itemLabels_.clear();
-      itemRows_.clear();
-      fui::TextStyle itemStyle = tokens.bodyText;
-      itemStyle.maxLines = 1;
-      // The room a label really gets: the row less the box, the two gaps and
-      // the side padding buildChecklist hands the component.
-      const int16_t labelWidth = static_cast<int16_t>(band.width - 26 - 3 * toybox::kGutter);
-      itemLabels_.reserve(static_cast<size_t>(shown > 0 ? shown : 0));
-      for (int i = 0; i < shown; ++i) {
-        const notes::Item& item = note->items[static_cast<size_t>(itemTop_ + i)];
-        itemLabels_.push_back(toybox::fitLines(target, item.text.c_str(), labelWidth, 1, itemStyle));
-      }
-      itemRows_.reserve(itemLabels_.size());
-      for (int i = 0; i < static_cast<int>(itemLabels_.size()); ++i) {
-        notesui::ChecklistRow row;
-        row.text = itemLabels_[static_cast<size_t>(i)].c_str();
-        row.done = note->items[static_cast<size_t>(itemTop_ + i)].done;
-        itemRows_.push_back(row);
-      }
-
-      std::snprintf(progressLabel_, sizeof(progressLabel_), "%d/%d", notes::doneCount(*note), count);
-      char pages[kPageLabelCap] = "";
-      if (count > itemVisible_) {
-        std::snprintf(pages, sizeof(pages), "%d / %d", itemTop_ / itemVisible_ + 1,
-                      (count + itemVisible_ - 1) / itemVisible_);
-      }
-      std::snprintf(pageLabel_, sizeof(pageLabel_), "%s", pages);
-
-      notesui::ChecklistModel model;
-      model.title = bandTitle_.c_str();
-      model.rows = itemRows_.empty() ? nullptr : itemRows_.data();
-      model.count = static_cast<int>(itemRows_.size());
-      model.firstIndex = itemTop_;
-      model.progressLabel = count > 0 ? progressLabel_ : nullptr;
-      model.pageLabel = pageLabel_[0] != '\0' ? pageLabel_ : nullptr;
-      model.editing = itemEditMode_;
-      model.empty = count == 0;
-      notesui::buildChecklist(screen, model);
-      what = "Notes checklist";
+    case View::Menu: {
+      notesui::MenuModel model;
+      model.title = openName_.c_str();
+      model.menuIcon = &icon_go_settings_32;
+      model.anyDone = anyDone();
+      notesui::buildMenu(screen, model);
       break;
     }
-
-    case Phase::Confirm: {
+    case View::Confirm: {
       notesui::ConfirmModel model;
-      model.title = confirmTitle_.c_str();
-      model.detail = confirmDetail_;
-      notesui::buildDeleteConfirm(screen, model);
-      what = "Notes confirm";
+      model.title = openName_.c_str();
+      model.menuIcon = &icon_go_settings_32;
+      model.prose = "Delete this note and everything written in it? There is no way back.";
+      notesui::buildConfirm(screen, model);
+      break;
+    }
+    case View::Phone: {
+      notesui::PhoneModel model;
+      model.title = openName_.c_str();
+      model.menuIcon = &icon_go_settings_32;
+      model.url = phoneUrl_.c_str();
+      model.readable = phoneReadable_.c_str();
+      model.saved = phoneSaved_;
+      const fui::Rect qr = notesui::buildPhone(screen, model);
+      QrUtils::drawQrCode(renderer, Rect{qr.x, qr.y, qr.width, qr.height}, phoneUrl_);
+      break;
+    }
+    case View::Notice: {
+      notesui::ConfirmModel model;
+      model.title = openName_.empty() ? "NOTES" : openName_.c_str();
+      model.prose = notice_.c_str();
+      notesui::buildNotice(screen, model);
       break;
     }
   }
 
   interactionsReady_ = true;
-  toybox::reportOverflow(interactions_, what);
-  const bool phaseChanged = !everShown_ || phase_ != lastShownPhase_;
-
-  // Both devices this fork builds for have touch, and drawButtonHints()
-  // returns early on any board that does, so these labels reach no panel
-  // today. Passed because every app here passes them and a lone exception
-  // would read as an oversight.
-  const auto labels = mappedInput.mapLabels("Back", "", "Up", "Down");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // The buffer records overflow and this reports it; a screen that silently
+  // drops its last three controls is how Connections lost all its buttons.
+  toybox::reportOverflow(interactions_, "Notes");
   renderer.displayBuffer();
-
-  // Stamped AFTER the panel has been written, so the settle window measures
-  // from when a person could first have seen this screen rather than from when
-  // the state changed. displayBuffer() blocks on the panel, so by here it is
-  // showing.
-  if (phaseChanged) {
-    lastShownPhase_ = phase_;
-    phaseShownAtMs_ = millis();
-    everShown_ = true;
-  }
 }

@@ -70,59 +70,12 @@ static void testTheGridAsksHowManyRowsItNeeds() {
     for (uint8_t month = 1; month <= 12; ++month) {
       const uint8_t rows = clockapp::weekRowsIn(year, month);
       const uint8_t cells = static_cast<uint8_t>(rows * 7);
-      const uint8_t needed = static_cast<uint8_t>(clockapp::firstColumnOf(year, month) + clockapp::daysInMonth(year, month));
+      const uint8_t needed =
+          static_cast<uint8_t>(clockapp::firstColumnOf(year, month) + clockapp::daysInMonth(year, month));
       CHECK(cells >= needed, "%u-%02u: %d cells for %d needed", year, month, cells, needed);
       CHECK(rows >= 4 && rows <= 6, "%u-%02u wants %d rows", year, month, rows);
     }
   }
-}
-
-// The RTC holds UTC and the panel shows local, so the offset has to move the
-// DATE as well as the hour. Half the world is on the other side of a midnight
-// from UTC for part of every day, and a calendar that highlighted the UTC day
-// would sit under a clock reading the local one.
-static void testTheOffsetCarriesTheDateAcrossMidnight() {
-  clockapp::Civil utc;
-  utc.year = 2026;
-  utc.month = 9;
-  utc.day = 20;
-  utc.hour = 20;
-  utc.minute = 30;
-  utc.second = 15;
-
-  // UTC+5:30 (Bengaluru) is biased 48 + 22 = 70. 20:30 UTC is 02:00 the NEXT
-  // day, in a new month is where this would break if the day just incremented.
-  const clockapp::Civil ist = clockapp::toLocal(utc, 70);
-  CHECK(ist.hour == 2 && ist.minute == 0, "20:30 UTC is 02:00 IST, got %02u:%02u", ist.hour, ist.minute);
-  CHECK(ist.day == 21 && ist.month == 9, "and it is the 21st, got %u-%02u", ist.day, ist.month);
-  CHECK(ist.second == 15, "the seconds are carried, not dropped");
-  CHECK(ist.weekday == clockapp::weekdayOf(2026, 9, 21), "the weekday follows the LOCAL date");
-
-  // Westward across midnight, which truncation-toward-zero gets wrong: it
-  // lands on the same day instead of the previous one.
-  clockapp::Civil early;
-  early.year = 2026;
-  early.month = 9;
-  early.day = 1;
-  early.hour = 3;
-  const clockapp::Civil la = clockapp::toLocal(early, 48 - 28);  // UTC-7
-  CHECK(la.hour == 20, "03:00 UTC is 20:00 the day before at UTC-7, got %02u", la.hour);
-  CHECK(la.day == 31 && la.month == 8, "which is 31 August, got %u-%02u", la.day, la.month);
-  CHECK(la.year == 2026, "still 2026");
-
-  // And across a year boundary, where the month table would be indexed with 0.
-  clockapp::Civil newYear;
-  newYear.year = 2027;
-  newYear.month = 1;
-  newYear.day = 1;
-  newYear.hour = 2;
-  const clockapp::Civil before = clockapp::toLocal(newYear, 48 - 20);  // UTC-5
-  CHECK(before.year == 2026 && before.month == 12 && before.day == 31, "got %u-%02u-%02u", before.year, before.month,
-        before.day);
-
-  // A corrupt offset clamps rather than throwing the date out of the calendar.
-  const clockapp::Civil clamped = clockapp::toLocal(utc, 255);
-  CHECK(clamped.year == 2026, "a nonsense offset still lands in a drawable year");
 }
 
 // The readouts. The stopwatch is the one that has to grow rather than wrap: an
@@ -205,7 +158,6 @@ static void testTheExpensiveCadenceOnlyRunsWhileSomethingCounts() {
 int main() {
   testWeekdaysAndLeapYears();
   testTheGridAsksHowManyRowsItNeeds();
-  testTheOffsetCarriesTheDateAcrossMidnight();
   testTheReadouts();
   testTheTimerFieldsWrapWithinThemselves();
   testTheExpensiveCadenceOnlyRunsWhileSomethingCounts();
