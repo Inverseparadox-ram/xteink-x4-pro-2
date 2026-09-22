@@ -176,6 +176,13 @@ bool commitImage() {
 
 }  // namespace
 
+RadioLease::RadioLease(std::string& message) { held_ = joinWifi(message); }
+
+// Puts the radio down only if this lease is what brought it up: joinWifi
+// returns true without touching anything when somebody else already had it,
+// and releaseWifi knows the difference.
+RadioLease::~RadioLease() { releaseWifi(); }
+
 bool checkNow(State& state, bool& imageArrived, std::string& message) {
   imageArrived = false;
   message.clear();
@@ -196,13 +203,18 @@ bool checkNow(State& state, bool& imageArrived, std::string& message) {
   }
 
   PullResult result;
-  const bool ok = pull(state.deviceToken, state.etag, kSleepImagePart, result);
+  const bool ok = pull(state.deviceToken, state.etag, state.on, kSleepImagePart, result);
 
   // The schedule headers are believed on every status that carried them,
   // including the failures that still answered. A 401 knows the cadence just as
   // well as a 200 does.
   if (result.serverEpoch > 0) adoptServerTime(result.serverEpoch);
   if (result.nextWakeSeconds > 0) state.intervalSeconds = result.nextWakeSeconds;
+  // Adopted only when it was sent. A service that stops sending it leaves the
+  // last cadence standing rather than reverting to the sleep, for the same
+  // reason an absent X-Next-Wake keeps the interval we had: one quiet reply
+  // must not rewrite a deliberate schedule.
+  if (result.cadenceSeconds > 0) state.cadenceSeconds = result.cadenceSeconds;
   state.lastAttemptEpoch = nowEpoch();
 
   if (!ok) {

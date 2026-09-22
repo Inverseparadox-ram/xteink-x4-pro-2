@@ -21,6 +21,42 @@ Everything above the marker is written by hand.
 
 <!-- releases, newest first -->
 
+### 1.13.18
+
+- Live: the board fits a phone, the history is shared, and a schedule can be a time of day
+
+### 1.13.17
+
+- Wallpapers: the upload route ends with the picture you sent
+
+### 1.13.16
+
+- Live: a scheduled refresh shows nobody anything
+
+### 1.13.15
+
+- Setting up Live works by scanning the square on the reader. It used to carry a code that was never real, so scanning could not work and you had to type the digits instead. The square and the digits now always match.
+- Live says when the reader will next look, on the website and on the reader, from the moment you connect it. There was no time shown anywhere until it had checked in once, which is when you most want to know it worked.
+- Sending your own picture over Wi-Fi has a way in again: tap Your phone on the Wallpapers screen. It had become unreachable once a reader had wallpapers on it.
+- Scanning a second reader's code while connected to a first now says so, rather than silently keeping the old one and sending your next drawing to the wrong reader.
+- A reader left on its setup screen no longer moves itself onto a new, empty Live and forgets the one you set up, which quietly stopped anything you sent arriving.
+
+### 1.13.14
+
+- nothing you can see on the device. This is the same firmware as 1.13.13, published by the new two-minute release process rather than the old forty-minute one.
+
+### 1.13.13
+
+- Live: the page moves onto the site, the service becomes an API
+
+### 1.13.12
+
+- Notes: adding an item was 5.3s of asking the card how full it was
+
+### 1.13.11
+
+- Live: add and remove phones, and a screen that says one thing
+
 ### 1.13.10
 
 - Hearts: the shelf's first trick-taking game
