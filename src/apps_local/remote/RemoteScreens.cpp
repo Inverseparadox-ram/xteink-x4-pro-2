@@ -2,10 +2,13 @@
 
 #include <FreeInkUIIcon.h>
 
+#include <cstdio>
+#include <cstring>
 #include <string>
 
 #include "../ui/ToyboxIcons.h"
 #include "../ui/ToyboxText.h"
+#include "RemoteVault.h"
 
 namespace remoteui {
 namespace {
@@ -73,6 +76,21 @@ void iconLabelButton(toybox::Screen& screen, const fui::Rect& rect, const freein
   screen.button(button, rect);
 }
 
+// Which padlock the unlock button wears. The face says what a tap will DO --
+// an open shackle unlocks, a closed one locks -- so it is read from the Mac's
+// last answer and never from what the reader last did.
+const freeink::Icon& unlockIcon(const UnlockFace face) {
+  switch (face) {
+    case UnlockFace::Unlock:
+      return icon_rc_unlock_40;
+    case UnlockFace::Lock:
+      return icon_rc_lock_40;
+    case UnlockFace::Ask:
+    default:
+      return icon_rc_ask_40;
+  }
+}
+
 }  // namespace
 
 void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
@@ -88,17 +106,24 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
   // bluetooth glyph and nothing else. Unpaired is the one case that has to
   // use words, because a remote the Mac cannot see has to say where to look,
   // and no icon says "System Settings > Bluetooth".
+  //
+  // The unlock button borrows the same slot for the one thing it has to be
+  // able to say. "Connected" and "the helper that answers the unlock button is
+  // running" are different facts and the mark only carries the first, so when
+  // the second fails the row has to use words.
   const int16_t statusSize = 32;
-  if (model.connected) {
+  const bool haveWords = model.pairingHint != nullptr && model.pairingHint[0] != '\0';
+  if (!haveWords) {
     screen.target().bitmap(
         fui::makeRect(static_cast<int16_t>(toybox::kMargin + width - statusSize), y, statusSize, statusSize),
-        fui::bitmapFromIcon(icon_rc_btok_32), fui::BitmapMode::Contain, fui::Paint::solid(fui::Color::Black));
+        fui::bitmapFromIcon(model.connected ? icon_rc_btok_32 : icon_rc_bt_32), fui::BitmapMode::Contain,
+        fui::Paint::solid(fui::Color::Black));
     y = static_cast<int16_t>(y + statusSize + gutter);
   } else {
     const int16_t lineH = screen.target().lineHeight(toybox::kUiFont);
     screen.target().bitmap(fui::makeRect(toybox::kMargin, y, statusSize, statusSize),
-                           fui::bitmapFromIcon(icon_rc_bt_32), fui::BitmapMode::Contain,
-                           fui::Paint::solid(fui::Color::Black));
+                           fui::bitmapFromIcon(model.connected ? icon_rc_btok_32 : icon_rc_bt_32),
+                           fui::BitmapMode::Contain, fui::Paint::solid(fui::Color::Black));
     const int16_t textX = static_cast<int16_t>(toybox::kMargin + statusSize + gutter);
     screen.target().text(
         fui::makeRect(textX, y, static_cast<int16_t>(width - statusSize - gutter), static_cast<int16_t>(lineH * 4)),
@@ -151,10 +176,10 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
   y = static_cast<int16_t>(y + rowH + gutter);
 
   // --- The three Mac shortcuts --------------------------------------------
-  // A microphone for Siri, Claude's mark, and the crescent macOS itself uses
-  // for Do Not Disturb. None of the three is a media key: each types a
-  // keyboard shortcut, which is the only thing a HID peripheral can do about
-  // an application or a system mode.
+  // A microphone for Siri, Claude's mark, and a padlock. None of the three is
+  // a media key: the first two type a keyboard shortcut, which is the only
+  // thing a HID peripheral can do about an application, and the third is the
+  // one control on this panel that will not act until the Mac has answered it.
   //
   // This row replaced explicit PLAY, PAUSE and STOP. Those were the transport
   // toggle spelled out three times, and the toggle above is what macOS honours
@@ -164,10 +189,13 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
   iconButton(screen, fui::makeRect(toybox::kMargin, y, trio, rowH), icon_rc_siri_40, 40, ActionSiri, false);
   iconButton(screen, fui::makeRect(static_cast<int16_t>(toybox::kMargin + trio + gutter), y, trio, rowH),
              icon_rc_claude_40, 40, ActionClaude, false);
+  // The face is the last VERIFIED answer, and the band is filled while a
+  // challenge is out -- four seconds of a locked Mac waking its helper is long
+  // enough that an unchanged button reads as one that did nothing.
   iconButton(screen,
              fui::makeRect(static_cast<int16_t>(toybox::kMargin + 2 * (trio + gutter)), y,
                            static_cast<int16_t>(width - 2 * (trio + gutter)), rowH),
-             icon_rc_dnd_40, 40, ActionDnd, false);
+             unlockIcon(model.unlockFace), 40, ActionUnlock, model.unlockBusy);
   y = static_cast<int16_t>(y + rowH + gutter);
 
   // --- Volume: two buttons and a mute --------------------------------------
@@ -233,6 +261,121 @@ void buildForgetConfirm(toybox::Screen& screen, const ForgetModel& model) {
   screen.button(unpair, fui::makeRect(static_cast<int16_t>(toybox::kMargin + (width - unpairWidth) / 2),
                                       static_cast<int16_t>(footerY - kFooterHeight - toybox::kMargin * 2), unpairWidth,
                                       kFooterHeight));
+}
+
+// --- Unlock ----------------------------------------------------------------
+
+void buildPin(toybox::Screen& screen, const PinModel& model) {
+  chrome(screen, model.title, nullptr, false);
+
+  const fui::DeviceContext& device = screen.device();
+  const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
+  const int16_t gutter = static_cast<int16_t>(toybox::kGutter);
+  int16_t y = static_cast<int16_t>(kBodyTop);
+
+  if (model.detail != nullptr && model.detail[0] != '\0') {
+    const int16_t lineH = screen.target().lineHeight(toybox::kUiFont);
+    screen.target().text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 3)), model.detail,
+                         plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::Black, 3));
+    y = static_cast<int16_t>(y + lineH * 3 + gutter);
+  }
+
+  // How many digits, never which. A PIN drawn back at the person typing it is
+  // a PIN readable from across the room, and this one is typed at a lock
+  // screen in public more often than anywhere else.
+  constexpr int16_t kSlot = 18;
+  constexpr int16_t kSlotGap = 14;
+  // As many marks as the SHORTEST PIN the pad will take, and then one more per
+  // digit beyond it. Drawing all twelve up front reads as an instruction to
+  // type twelve, which four-digit PINs are then a failure to follow.
+  const int16_t floorSlots = static_cast<int16_t>(remote::vault::kPinMinLen);
+  const int16_t slots = model.entered > floorSlots ? static_cast<int16_t>(model.entered) : floorSlots;
+  const int16_t slotsWidth = static_cast<int16_t>(slots * kSlot + (slots - 1) * kSlotGap);
+  int16_t slotX = static_cast<int16_t>(toybox::kMargin + (width - slotsWidth) / 2);
+  for (int16_t i = 0; i < slots; ++i) {
+    const fui::Rect where = fui::makeRect(slotX, y, kSlot, kSlot);
+    if (i < static_cast<int16_t>(model.entered)) {
+      screen.target().fill(where, fui::Paint::solid(fui::Color::Black), kSlot / 2);
+    } else {
+      // A hairline ring rather than nothing, so the length of the PIN the pad
+      // will take is visible before any of it is typed.
+      screen.target().stroke(where, fui::Paint::solid(fui::Color::Black), 1, kSlot / 2);
+    }
+    slotX = static_cast<int16_t>(slotX + kSlot + kSlotGap);
+  }
+  y = static_cast<int16_t>(y + kSlot + gutter * 2);
+
+  // Ten digits, three to a row, with backspace and confirm on the last -- the
+  // same pad the comic number uses, because a second arrangement of the same
+  // twelve keys is a second thing to learn.
+  const int16_t footerTop = static_cast<int16_t>(device.height - toybox::kMargin);
+  const int16_t keyW = static_cast<int16_t>((width - gutter * 2) / 3);
+  const int16_t keyH = static_cast<int16_t>((footerTop - y - gutter * 3) / 4);
+  static const char* kKeys[12] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "<", "0", "OK"};
+  for (int i = 0; i < 12; ++i) {
+    const int row = i / 3;
+    const int col = i % 3;
+    fui::ButtonProps key;
+    key.label = kKeys[i];
+    // The one key on the pad that is the device agreeing rather than a digit
+    // keeps the primary band; everything else is outlined. Same rule as every
+    // confirm in this fork.
+    const bool primary = i == 11 && model.canConfirm;
+    if (!primary) key.styles = toybox::rowStyles();
+    if (i == 9) {
+      key.action = ActionPinBack;
+      key.enabled = model.entered > 0;
+    } else if (i == 11) {
+      key.action = ActionPinOk;
+      key.enabled = model.canConfirm;
+    } else {
+      key.action = ActionPinDigit;
+      key.value = static_cast<int16_t>(i == 10 ? 0 : i + 1);
+      key.enabled = model.entered < remote::vault::kPinMaxLen;
+    }
+    screen.button(key, fui::makeRect(static_cast<int16_t>(toybox::kMargin + col * (keyW + gutter)),
+                                     static_cast<int16_t>(y + row * (keyH + gutter)), keyW, keyH));
+  }
+}
+
+void buildPair(toybox::Screen& screen, const PairModel& model) {
+  chrome(screen, "PAIR", nullptr, false);
+
+  const fui::DeviceContext& device = screen.device();
+  const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
+  const int16_t gutter = static_cast<int16_t>(toybox::kGutter);
+  int16_t y = static_cast<int16_t>(kBodyTop);
+
+  screen.target().bitmap(fui::makeRect(static_cast<int16_t>(toybox::kMargin + (width - 40) / 2), y, 40, 40),
+                         fui::bitmapFromIcon(icon_rc_key_40), fui::BitmapMode::Contain,
+                         fui::Paint::solid(fui::Color::Black));
+  y = static_cast<int16_t>(y + 40 + gutter);
+
+  const int16_t lineH = screen.target().lineHeight(toybox::kUiFont);
+  screen.target().text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 4)), model.detail,
+                       plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::Black, 4));
+  y = static_cast<int16_t>(y + lineH * 4 + gutter);
+
+  // Eight groups of four on four lines. Thirty-two unbroken characters is a
+  // line people lose their place in halfway across, and this one is read off a
+  // screen and typed into another machine exactly once.
+  const int16_t codeH = screen.target().lineHeight(toybox::kDisplayFont);
+  char line[12];
+  const size_t have = std::strlen(model.code);
+  for (int row = 0; row < 4; ++row) {
+    const size_t at = static_cast<size_t>(row) * 8;
+    if (at + 8 > have) break;
+    std::snprintf(line, sizeof(line), "%.4s %.4s", model.code + at, model.code + at + 4);
+    screen.target().text(fui::makeRect(toybox::kMargin, static_cast<int16_t>(y + row * codeH), width, codeH), line,
+                         plain(toybox::kDisplayFont, fui::TextAlign::Center, fui::Color::Black, 1));
+  }
+  y = static_cast<int16_t>(y + codeH * 4 + gutter);
+
+  const int16_t footerY = static_cast<int16_t>(device.height - toybox::kMargin - kFooterHeight);
+  fui::ButtonProps done;
+  done.label = "TYPED IT";
+  done.action = ActionPairDone;
+  screen.button(done, fui::makeRect(toybox::kMargin, footerY, width, kFooterHeight));
 }
 
 }  // namespace remoteui

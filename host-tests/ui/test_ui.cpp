@@ -8899,6 +8899,22 @@ void buildTheRemote(Rendered& out, const remoteui::RemoteModel& model) {
   remoteui::buildRemote(screen, model);
 }
 
+void buildThePin(Rendered& out, const remoteui::PinModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  remoteui::buildPin(screen, model);
+}
+
+void buildThePair(Rendered& out, const remoteui::PairModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  remoteui::buildPair(screen, model);
+}
+
 void buildWeatherPlaces(Rendered& out, const weatherui::PlacesModel& model) {
   const fui::DeviceContext ctx = device();
   const fui::InputSnapshot noInput{};
@@ -9649,7 +9665,7 @@ void testEveryRemoteControlIsLive() {
   CHECK(out.has(remoteui::ActionPrevious));
   CHECK(out.has(remoteui::ActionSiri));
   CHECK(out.has(remoteui::ActionClaude));
-  CHECK(out.has(remoteui::ActionDnd));
+  CHECK(out.has(remoteui::ActionUnlock));
   CHECK(out.has(remoteui::ActionForward));
   CHECK(out.has(remoteui::ActionBack));
   CHECK(out.has(remoteui::ActionVolumeUp));
@@ -9663,7 +9679,8 @@ void testEveryRemoteControlIsLive() {
   // and every one of them was a picture's job -- this is the check that keeps
   // them off, because a label creeping back is invisible in a diff and obvious
   // on the device.
-  for (const char* word : {"PLAY/PAUSE", "VOLUME", "MUTE", "FWD", "PREV", "NEXT", "SIRI", "CLAUDE", "DND", "FOCUS"}) {
+  for (const char* word :
+       {"PLAY/PAUSE", "VOLUME", "MUTE", "FWD", "PREV", "NEXT", "SIRI", "CLAUDE", "DND", "FOCUS", "UNLOCK", "LOCK"}) {
     CHECK(!drewText(out, word));
   }
 
@@ -9689,7 +9706,7 @@ void testEveryRemoteControlWinsItsOwnCentre() {
 
   for (const fui::ActionId action :
        {remoteui::ActionPlayPause, remoteui::ActionNext, remoteui::ActionPrevious, remoteui::ActionSiri,
-        remoteui::ActionClaude, remoteui::ActionDnd, remoteui::ActionForward, remoteui::ActionBack,
+        remoteui::ActionClaude, remoteui::ActionUnlock, remoteui::ActionForward, remoteui::ActionBack,
         remoteui::ActionVolumeUp, remoteui::ActionVolumeDown, remoteui::ActionMute, remoteui::ActionProfile}) {
     fui::Rect rect{};
     bool found = false;
@@ -9750,6 +9767,120 @@ void testThePairingSentenceAppearsOnlyWhenItIsNeeded() {
   buildTheRemote(live, model);
   CHECK(!drewText(live, "System Settings"));
   CHECK(live.has(remoteui::ActionPlayPause));
+}
+
+// The unlock button is a toggle over a state the reader does not own, so its
+// face has to follow what the Mac last SAID rather than what the reader last
+// did. All three faces have to be the same live control -- a face that stops
+// being tappable is a button that has locked the user out of its own retry.
+void testTheUnlockButtonIsLiveInEveryFace() {
+  for (const remoteui::UnlockFace face :
+       {remoteui::UnlockFace::Ask, remoteui::UnlockFace::Unlock, remoteui::UnlockFace::Lock}) {
+    Rendered out;
+    remoteui::RemoteModel model;
+    model.connected = true;
+    model.profileName = "YOUTUBE";
+    model.unlockFace = face;
+    buildTheRemote(out, model);
+    CHECK(out.has(remoteui::ActionUnlock));
+
+    fui::Rect rect{};
+    for (size_t i = 0; i < out.interactions.count(); ++i) {
+      if (out.interactions.data()[i].action == remoteui::ActionUnlock) rect = out.interactions.data()[i].rect;
+    }
+    const fui::ActionEvent hit = out.tap(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    CHECK(hit.action == remoteui::ActionUnlock);
+  }
+
+  // Busy fills the band rather than removing the control: four seconds of a
+  // locked Mac waking its helper is long enough that an unchanged button reads
+  // as one that did nothing, and a disabled one could not be given up on.
+  Rendered busy;
+  remoteui::RemoteModel model;
+  model.connected = true;
+  model.profileName = "YOUTUBE";
+  model.unlockBusy = true;
+  buildTheRemote(busy, model);
+  CHECK(busy.has(remoteui::ActionUnlock));
+}
+
+// Connected and "the helper that answers the unlock button is running" are
+// different facts, and the bluetooth mark only carries the first. When the
+// second fails the row has to use words -- and it must still be the CONNECTED
+// mark beside them, or the screen would be saying the radio dropped.
+void testTheStatusRowCanCarryTheUnlockMessage() {
+  Rendered out;
+  remoteui::RemoteModel model;
+  model.connected = true;
+  model.pairingHint = "The Mac is connected, but the unlock helper is not running.";
+  model.profileName = "YOUTUBE";
+  buildTheRemote(out, model);
+  CHECK(drewText(out, "unlock helper"));
+  // The panel does not shrink to make room: every control is still live in the
+  // tighter layout the sentence leaves behind.
+  CHECK(out.has(remoteui::ActionUnlock));
+  CHECK(out.has(remoteui::ActionMute));
+  CHECK(out.has(remoteui::ActionPlayPause));
+  CHECK(!out.interactions.overflowed());
+}
+
+// The PIN pad: twelve keys, and the two that are not digits are the two that
+// can be dead. A disabled button registers no hit rect at all, so this is the
+// check that they come BACK when they should.
+void testThePinPadEnablesOnlyWhatCanBePressed() {
+  Rendered empty;
+  remoteui::PinModel model;
+  model.entered = 0;
+  model.canConfirm = false;
+  buildThePin(empty, model);
+  CHECK(empty.has(remoteui::ActionPinDigit));
+  // Nothing to delete and nothing to confirm.
+  CHECK(!empty.has(remoteui::ActionPinBack));
+  CHECK(!empty.has(remoteui::ActionPinOk));
+
+  Rendered ready;
+  model.entered = 4;
+  model.canConfirm = true;
+  buildThePin(ready, model);
+  CHECK(ready.has(remoteui::ActionPinDigit));
+  CHECK(ready.has(remoteui::ActionPinBack));
+  CHECK(ready.has(remoteui::ActionPinOk));
+  CHECK(!ready.interactions.overflowed());
+
+  // The digits are never drawn back at the person typing them. This one is
+  // typed at a lock screen in public more often than anywhere else.
+  for (const char* typed : {"1590", "159", "15"}) {
+    CHECK(!drewText(ready, typed));
+  }
+
+  // Every digit key carries its own value, and zero is a digit like any other
+  // -- an off-by-one here gives a pad where 0 types nothing.
+  bool sawZero = false;
+  bool sawNine = false;
+  for (size_t i = 0; i < ready.interactions.count(); ++i) {
+    const auto& entry = ready.interactions.data()[i];
+    if (entry.action != remoteui::ActionPinDigit) continue;
+    if (entry.value == 0) sawZero = true;
+    if (entry.value == 9) sawNine = true;
+  }
+  CHECK(sawZero);
+  CHECK(sawNine);
+}
+
+// The pairing code is read off this screen and typed into another machine
+// exactly once, so it is grouped. Thirty-two unbroken characters is a line
+// people lose their place in halfway across.
+void testThePairingCodeIsGrouped() {
+  Rendered out;
+  remoteui::PairModel model;
+  model.code = "EQ6JAJW4WBNF59M141KM6D5JDS5Y56AM";
+  model.detail = "Type this into the unlock helper on the Mac.";
+  buildThePair(out, model);
+  CHECK(out.has(remoteui::ActionPairDone));
+  // Four lines of two groups, never the unbroken string.
+  CHECK(drewText(out, "EQ6J AJW4"));
+  CHECK(drewText(out, "DS5Y 56AM"));
+  CHECK(!drewText(out, "EQ6JAJW4WBNF59M141KM6D5JDS5Y56AM"));
 }
 
 // Every control the clock claims to have is registered and wins the hit test
@@ -14101,6 +14232,10 @@ int main() {
   testEveryRemoteControlWinsItsOwnCentre();
   testSeekNumbersAppearOnlyWhereTheProfileKeepsThem();
   testThePairingSentenceAppearsOnlyWhenItIsNeeded();
+  testTheUnlockButtonIsLiveInEveryFace();
+  testTheStatusRowCanCarryTheUnlockMessage();
+  testThePinPadEnablesOnlyWhatCanBePressed();
+  testThePairingCodeIsGrouped();
   testEveryForecastViewOffersAllThreeSegments();
   testAnUnreportedFieldIsNotDrawnAsZero();
   testPlacesRowsOpenUntilRemoveModeSaysOtherwise();

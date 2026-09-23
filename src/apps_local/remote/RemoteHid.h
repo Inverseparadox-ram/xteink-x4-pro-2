@@ -101,6 +101,20 @@ bool typeText(const char* text);
 // Taps Return.
 bool sendReturn();
 
+// Types `text` as keystrokes, US layout, every printable ASCII character --
+// which is what a password needs and what typeText() deliberately does not do.
+//
+// The layout is the catch, and it cannot be discovered from here: HID carries
+// key POSITIONS, and the Mac decides what character each position produces. On
+// a non-US layout the symbols land wrong. docs/apps/remote.md says so; there
+// is nothing the reader can do about it, because nothing comes back.
+bool typeSecret(const char* text);
+
+// Taps a modifier with no key on it. Types nothing anywhere, which is the
+// point: it wakes a sleeping display so the login window is up and focused
+// before a password is sent at it.
+bool wakeHost();
+
 // Holds a media key down for `ms` and then releases it. Fast-forward and
 // rewind are press-and-hold scrub controls on the hosts that implement them at
 // all; a tap of one is usually ignored.

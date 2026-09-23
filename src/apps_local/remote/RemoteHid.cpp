@@ -2,6 +2,8 @@
 
 #include <Logging.h>
 
+#include "RemoteLink.h"
+
 #if defined(CROSSPLAY_BLE_HID)
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -169,6 +171,76 @@ uint8_t keyboardUsageFor(const char c) {
   return 0;
 }
 
+// US-layout HID keyboard usage plus the shift flag, for every printable ASCII
+// character. A password is not an application name: it has symbols in it, and
+// keyboardUsageFor() above deliberately knows only letters and digits.
+struct KeyStroke {
+  uint8_t usage;
+  bool shift;
+};
+
+KeyStroke strokeFor(const char c) {
+  if (c >= 'a' && c <= 'z') return {static_cast<uint8_t>(0x04 + (c - 'a')), false};
+  if (c >= 'A' && c <= 'Z') return {static_cast<uint8_t>(0x04 + (c - 'A')), true};
+  if (c >= '1' && c <= '9') return {static_cast<uint8_t>(0x1E + (c - '1')), false};
+  if (c == '0') return {0x27, false};
+  // The shifted number row, in the order the keys sit in.
+  static const char* kShiftedDigits = ")!@#$%^&*(";
+  for (int i = 0; i < 10; ++i) {
+    if (c == kShiftedDigits[i]) return {static_cast<uint8_t>(i == 0 ? 0x27 : 0x1E + (i - 1)), true};
+  }
+  switch (c) {
+    case ' ':
+      return {0x2C, false};
+    case '-':
+      return {0x2D, false};
+    case '_':
+      return {0x2D, true};
+    case '=':
+      return {0x2E, false};
+    case '+':
+      return {0x2E, true};
+    case '[':
+      return {0x2F, false};
+    case '{':
+      return {0x2F, true};
+    case ']':
+      return {0x30, false};
+    case '}':
+      return {0x30, true};
+    case '\\':
+      return {0x31, false};
+    case '|':
+      return {0x31, true};
+    case ';':
+      return {0x33, false};
+    case ':':
+      return {0x33, true};
+    case '\'':
+      return {0x34, false};
+    case '"':
+      return {0x34, true};
+    case '`':
+      return {0x35, false};
+    case '~':
+      return {0x35, true};
+    case ',':
+      return {0x36, false};
+    case '<':
+      return {0x36, true};
+    case '.':
+      return {0x37, false};
+    case '>':
+      return {0x37, true};
+    case '/':
+      return {0x38, false};
+    case '?':
+      return {0x38, true};
+    default:
+      return {0, false};
+  }
+}
+
 bool tapKeyboard(const uint8_t modifiers, const uint8_t key) {
   uint8_t press[8] = {modifiers, 0, key, 0, 0, 0, 0, 0};
   const uint8_t release[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -214,12 +286,26 @@ void begin() {
   consumerIn = hid->getInputReport(kReportConsumer);
   keyboardIn = hid->getInputReport(kReportKeyboard);
 
+  // The unlock button's own service, BEFORE the server starts: NimBLE
+  // registers services at start, and one added afterwards is a service the
+  // host never discovers.
+  helper::begin();
+
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
   advertising->setAppearance(HID_KEYBOARD);
   advertising->addServiceUUID(hid->getHidService()->getUUID());
   advertising->enableScanResponse(true);
   server->start();
   advertising->start();
+
+  // AFTER start(), which fills the scan response from its own stored data when
+  // it has not been set yet -- doing this first would have it overwritten.
+  // The Mac's helper scans for this UUID when it cannot find the reader among
+  // the peripherals macOS has already connected.
+  NimBLEAdvertisementData scanResponse;
+  scanResponse.setName(kName);
+  scanResponse.addServiceUUID(NimBLEUUID(helper::serviceUuid()));
+  advertising->setScanResponseData(scanResponse);
   LOG_INF(kTag, "advertising as '%s'", kName);
 }
 
@@ -227,6 +313,8 @@ void end() {
   if (!started) return;
   started = false;
   hostConnected = false;
+  // Before deinit, which frees the service this points at.
+  helper::end();
   NimBLEDevice::deinit(true);
   hid = nullptr;
   consumerIn = nullptr;
@@ -275,6 +363,36 @@ bool typeText(const char* text) {
 
 bool sendReturn() { return tapKeyboard(0, 0x28); }
 
+bool typeSecret(const char* text) {
+  if (text == nullptr) return false;
+  for (const char* c = text; *c != '\0'; ++c) {
+    const KeyStroke stroke = strokeFor(*c);
+    // A character with no key is an ABORT, not a skip: typeText() may lose a
+    // stray character out of an application name and still land on the right
+    // hit, but a password with a character missing is a failed attempt the Mac
+    // counts against the account.
+    if (stroke.usage == 0) {
+      LOG_ERR(kTag, "unlock: no US-layout key for a character; typing nothing");
+      return false;
+    }
+    if (!tapKeyboard(stroke.shift ? 0x02 : 0x00, stroke.usage)) return false;
+  }
+  return true;
+}
+
+bool wakeHost() {
+  // Left shift held down and let go, with no key on the report. Nothing is
+  // typed, and a display that was asleep is awake by the time the password
+  // starts.
+  const uint8_t press[8] = {0x02, 0, 0, 0, 0, 0, 0, 0};
+  const uint8_t release[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  if (!notify(keyboardIn, press, sizeof(press))) return false;
+  delay(kKeyHoldMs);
+  notify(keyboardIn, release, sizeof(release));
+  delay(kKeyHoldMs);
+  return true;
+}
+
 bool hold(const Key key, const uint32_t ms) {
   const uint16_t usage = usageFor(key);
   if (usage == 0) return false;
@@ -299,7 +417,7 @@ void forgetPairings() {
 #else  // simulator: no radio, so the screens can still be driven and rendered.
 
 void begin() { LOG_INF(kTag, "sim: no radio; pretending to advertise"); }
-void end() {}
+void end() { helper::end(); }
 Link link() { return Link::Advertising; }
 bool ready() { return false; }
 bool send(Key) { return false; }
@@ -307,6 +425,8 @@ bool sendChord(const Chord&) { return false; }
 bool holdChord(const Chord&, uint32_t) { return false; }
 bool typeText(const char*) { return false; }
 bool sendReturn() { return false; }
+bool typeSecret(const char*) { return false; }
+bool wakeHost() { return false; }
 bool hold(Key, uint32_t) { return false; }
 void setBattery(uint8_t) {}
 void forgetPairings() {}

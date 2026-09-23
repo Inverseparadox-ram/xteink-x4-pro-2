@@ -83,21 +83,6 @@ static void testSiriAndClaudeShareCommandSpace() {
   CHECK(remote::kSiriHoldMs >= 1000, "the Siri hold clears macOS's own one second");
 }
 
-// Do Not Disturb is the one button with no stock shortcut behind it, so the
-// chord has to be one nothing else claims -- a user who binds it must not find
-// they have broken something they already had.
-static void testDoNotDisturbIsAChordNothingElseClaims() {
-  const remote::KeyChord dnd = remote::doNotDisturbChord();
-  CHECK(dnd.key == 0x07, "the key is D, got 0x%02X", dnd.key);
-  // Control + Option + Command, all three. Two-modifier chords are where
-  // macOS and the common applications put their own shortcuts.
-  CHECK(dnd.modifiers == (1 | 4 | 8), "Control-Option-Command, got %d", dnd.modifiers);
-
-  // And it must not collide with the one other chord this app sends.
-  const remote::KeyChord cmdSpace = remote::commandSpace();
-  CHECK(!(dnd.key == cmdSpace.key && dnd.modifiers == cmdSpace.modifiers), "the two chords are distinct");
-}
-
 // The Claude button types this into Spotlight, so it has to be typeable: the
 // keyboard report this app builds covers letters, digits and space, and
 // nothing else.
@@ -114,7 +99,6 @@ int main() {
   testOnlyTheProfileThatKnowsTheNumbersPrintsThem();
   testBrowserSeekTypesTheYouTubeKeys();
   testSiriAndClaudeShareCommandSpace();
-  testDoNotDisturbIsAChordNothingElseClaims();
   testTheClaudeQueryIsTypeable();
   std::printf("%s  remote core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;

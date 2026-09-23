@@ -24,12 +24,11 @@
 //    anyone touched the volume on the Mac. Two buttons claim nothing: each tap
 //    is one step, which is exactly what the wire carries.
 //
-// 3. THE THREE SHORTCUT BUTTONS TYPE WHAT A MAC ALREADY UNDERSTANDS. There is
-//    no HID usage for Siri, for launching an application, or for Do Not
-//    Disturb. Each of those is a keyboard shortcut on macOS, so each button
-//    sends that shortcut and the documentation says which. Two of the three
-//    work on a stock Mac; Do Not Disturb has no default shortcut anywhere in
-//    macOS, so that one has to be bound once. See docs/apps/remote.md.
+// 3. THE SHORTCUT BUTTONS TYPE WHAT A MAC ALREADY UNDERSTANDS. There is no HID
+//    usage for Siri and none for launching an application, so both are
+//    keyboard shortcuts a stock Mac already has, sent as chords. Nothing has
+//    to be bound first. The unlock button beside them is the exception that
+//    needed a protocol rather than a chord -- see RemoteVault.h.
 // ---------------------------------------------------------------------------
 
 #include <cstdint>
@@ -70,7 +69,7 @@ KeyChord backChord(Profile profile);
 const char* forwardSeconds(Profile profile);
 const char* backSeconds(Profile profile);
 
-// --- The three shortcut buttons ------------------------------------------
+// --- The shortcut buttons -------------------------------------------------
 //
 // Each is a chord the Mac already knows, or is told once.
 
@@ -83,12 +82,6 @@ inline constexpr uint32_t kSiriHoldMs = 1200;
 
 // Command-Space. Held it is Siri, tapped it is Spotlight.
 KeyChord commandSpace();
-
-// Control-Option-Command-D. macOS ships NO default shortcut for Do Not
-// Disturb, so this is a chord the user binds once (Shortcuts app -> Set Focus
-// -> add keyboard shortcut). Chosen because nothing in macOS or the common
-// applications claims it, so binding it breaks nothing.
-KeyChord doNotDisturbChord();
 
 // What the Claude button types into Spotlight after opening it. Spotlight is
 // the one route to an application that needs nothing set up on the Mac first.

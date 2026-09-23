@@ -9,7 +9,6 @@ constexpr uint8_t kKeyJ = 0x0D;
 constexpr uint8_t kKeyRight = 0x4F;
 constexpr uint8_t kKeyLeft = 0x50;
 constexpr uint8_t kKeySpace = 0x2C;
-constexpr uint8_t kKeyD = 0x07;
 
 // Modifier bits, mirrored from RemoteHid::Chord.
 constexpr uint8_t kModCtrl = 1;
@@ -71,7 +70,5 @@ const char* forwardSeconds(const Profile profile) {
 const char* backSeconds(const Profile profile) { return profile == Profile::Browser ? "5" : nullptr; }
 
 KeyChord commandSpace() { return KeyChord{kModCmd, kKeySpace}; }
-
-KeyChord doNotDisturbChord() { return KeyChord{static_cast<uint8_t>(kModCtrl | kModAlt | kModCmd), kKeyD}; }
 
 }  // namespace remote

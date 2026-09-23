@@ -19,7 +19,9 @@
 #include "../ui/ToyboxScreen.h"
 #include "RemoteCore.h"
 #include "RemoteHid.h"
+#include "RemoteLink.h"
 #include "RemoteScreens.h"
+#include "RemoteVault.h"
 
 class RemoteActivity final : public Activity {
  public:
@@ -34,7 +36,11 @@ class RemoteActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  enum class Phase : uint8_t { Remote, Forget };
+  enum class Phase : uint8_t { Remote, Forget, Pin, Pair };
+
+  // What the PIN being typed is for. The same twelve keys either unseal a
+  // pairing that exists or set the one that is about to.
+  enum class PinPurpose : uint8_t { Open, Choose };
 
   void press(remote::Key key);
   void seek(bool forward);
@@ -42,6 +48,23 @@ class RemoteActivity final : public Activity {
   void toggleMute();
   void openClaude();
   void cycleProfile();
+
+  // --- Unlock ---------------------------------------------------------------
+
+  void tapUnlock();
+  void beginPairing();
+  void pinDigit(int digit);
+  void pinBackspace();
+  void pinConfirm();
+  bool startChallenge(remote::vault::Op op);
+  void pollChallenge();
+  void finishUnlock(const remote::vault::Response& response);
+  void sendLockChord();
+  void forgetUnlockPairing();
+  void clearSecrets();
+
+  bool loadPairing();
+  void savePairing();
 
   // The store is one line in a file; a whole PersistableStore for a single
   // enum would be more machinery than the setting deserves.
@@ -51,6 +74,41 @@ class RemoteActivity final : public Activity {
   remote::Profile profile_ = remote::Profile::Browser;
   bool muted_ = false;
   Phase phase_ = Phase::Remote;
+
+  // --- Unlock state ---------------------------------------------------------
+  //
+  // `sealed_` is what is on the card; `secret_` is what a PIN opened it into
+  // and exists in RAM only, for as long as the app is open. Nothing here is
+  // ever written out in the clear.
+  bool paired_ = false;
+  uint8_t salt_[remote::vault::kSaltLen] = {};
+  uint8_t sealed_[remote::vault::kSecretLen] = {};
+  uint64_t counter_ = 0;
+
+  bool haveSecret_ = false;
+  uint8_t secret_[remote::vault::kSecretLen] = {};
+
+  // Held only between the PAIR screen and the PIN that seals it.
+  uint8_t freshSecret_[remote::vault::kSecretLen] = {};
+  char pairCode_[33] = {};
+
+  char pin_[remote::vault::kPinMaxLen + 1] = {};
+  uint8_t pinLen_ = 0;
+  PinPurpose pinPurpose_ = PinPurpose::Open;
+  const char* pinDetail_ = "";
+
+  // The last VERIFIED answer, and nothing else. A reader that remembered what
+  // it had done rather than what it had been told would be wrong the first
+  // time anyone touched the Mac's own keyboard -- and being wrong here means
+  // typing a password into an open session.
+  remote::vault::Screen macScreen_ = remote::vault::Screen::Unknown;
+  remote::vault::Challenge pending_;
+  bool unlockBusy_ = false;
+  const char* unlockDetail_ = "";
+
+  // When to ask the Mac what happened, after doing something that should have
+  // changed it. Zero means nothing is due.
+  uint32_t statusDueAt_ = 0;
 
   // Last time the link state was drawn, so the screen can follow a connection
   // appearing without repainting e-ink on a timer.

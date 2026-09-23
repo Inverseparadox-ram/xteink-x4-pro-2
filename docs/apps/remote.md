@@ -75,38 +75,127 @@ long as the host feels like would be lying.
 
 ## The three shortcut buttons
 
-The third row is a microphone, Claude's mark and a crescent moon. None of the
-three is a media key -- HID has no usage for Siri, for launching an
-application, or for Do Not Disturb -- so each one types a keyboard shortcut,
-the same way the seek buttons do.
+The third row is a microphone, Claude's mark and a padlock. None of the three
+is a media key -- HID has no usage for Siri and none for launching an
+application -- so the first two type a keyboard shortcut, the same way the seek
+buttons do. The third needed something HID cannot do at all; see below.
 
 | Button | Sends | Needs setting up? |
 | --- | --- | --- |
 | Siri | `⌘Space` **held** for 1.2s | No, if Siri's shortcut is "Hold ⌘ Space" (System Settings → Apple Intelligence & Siri) |
 | Claude | `⌘Space` tapped, then types `claude`, then Return | No -- that is Spotlight, and it is stock |
-| Do Not Disturb | `⌃⌥⌘D` | **Yes**, once. See below |
+| Unlock / Lock | A challenge, then the password; or `⌃⌘Q` | **Yes**, once. See below |
 
 **Siri and Claude ride the same chord.** macOS itself separates Siri from
 Spotlight by whether ⌘Space is *held* or *tapped*, so this remote does too --
 which is why neither button needs anything configured that a Mac does not
 already have. `host-tests/remote` asserts the two stay on one chord.
 
-**Do Not Disturb has no default shortcut anywhere in macOS**, so `⌃⌥⌘D` does
-nothing until it is bound once:
-
-> Shortcuts app → **+** → search "Set Focus" → set it to *Do Not Disturb,
-> Toggle* → rename the shortcut → **ⓘ** → *Add Keyboard Shortcut* → press
-> ⌃⌥⌘D.
-
-That chord was picked because nothing in macOS or the common applications
-claims it, so binding it takes nothing away. The remote has no way to tell
-whether you have bound it -- nothing comes back -- so a Do Not Disturb button
-that appears to do nothing means the binding is missing.
-
 This row replaced explicit PLAY, PAUSE and STOP buttons. Those were the
 transport toggle spelled out three times; the toggle above is what macOS
 honours most reliably anyway, so they cost a third of the panel and added one
-control it did not already give.
+control it did not already give. The padlock replaced a Do Not Disturb button
+that sent `⌃⌥⌘D`, a chord with no default binding anywhere in macOS -- so it
+did nothing at all until the user made a Shortcut for it, and the remote had no
+way to tell whether they had.
+
+## The unlock button
+
+**macOS exposes no API for dismissing the lock screen.** Not to a signed
+helper, not to a LaunchAgent, not to anything: Apple reserves unlocking for the
+password field, Touch ID and Apple Watch. So the only way any Bluetooth device
+unlocks a Mac is to **type the password**, and that is what this does.
+
+Given that the keystrokes *are* the unlock, the exchange in front of them buys
+four things, and each is a failure it removes:
+
+1. **The reader holds no password.** It lives in the Mac's Keychain. The Mac
+   sends it, encrypted under a key derived from the paired secret and a nonce
+   that has never been used before, and only in answer to a request it has
+   authenticated.
+2. **The reader will not type into a stranger's Mac**, because it has nothing
+   to type until a host holding the secret has answered.
+3. **The reader will not type into an unlocked session.** The Mac reports its
+   real lock state inside the MAC, and sends no password unless the screen is
+   locked. Without this the failure is ugly and silent: press unlock at an
+   awake Mac and the password goes into whatever field has focus.
+4. **A stolen reader is not a key.** The secret is sealed under a PIN, and no
+   verifier is stored beside it -- every PIN opens the blob into a well-formed
+   secret, so there is nothing to test a guess against offline. The only oracle
+   is the Mac, which counts wrong answers and backs off.
+
+What it does **not** buy, stated plainly: anyone with the reader *and* the PIN
+can unlock the Mac. That is the design -- a key and a code -- not a gap in it.
+And it does nothing at the FileVault pre-boot screen, because Bluetooth is not
+up that early.
+
+### The face is what the Mac last said
+
+| Face | Means | A tap |
+| --- | --- | --- |
+| Question shield | Nothing verified yet | Asks |
+| Open padlock | The Mac said it is locked | Sends the password |
+| Closed padlock | The Mac said it is awake | Sends `⌃⌘Q` |
+
+It is read from the last **verified** answer and never from what the reader
+last did. A reader that assumed the Mac was still locked because it had locked
+it would be wrong the first time anyone touched the Mac's own keyboard -- and
+being wrong here means typing a password into an open session.
+
+**Locking needs no helper at all.** It is a plain `⌃⌘Q`, because locking a
+screen is not a security decision -- the worst a forged one can do is lock a
+screen -- and a lock button that stops working when the helper is asleep is
+broken exactly when someone wants it.
+
+### The wire
+
+A second GATT service beside the HID one, because HID is one-way and this needs
+an answer. Two characteristics, both fixed-shape:
+
+| | |
+| --- | --- |
+| service | `6F1B0A00-9D3C-4F5E-8A77-2B4C1D6E9F01` |
+| challenge (notify) | 58 bytes: version, op, counter, 16-byte nonce, MAC |
+| response (write) | 11-byte head, the sealed password, 32-byte MAC |
+
+Three keys, one per purpose, all `HMAC(secret, label ‖ nonce)`, so the key that
+authenticates a request can never be made to produce a keystream. The password
+is encrypted with HMAC-SHA256 in counter mode and then MAC'd -- encrypt-then-
+MAC, so a bent payload is rejected before anything decrypts it. The counter is
+persisted on both sides and only ever goes up, which is what stops a recorded
+unlock request being replayed at a locked Mac.
+
+`src/apps_local/remote/RemoteVault.h` is the definition, and
+`host-tests/remotevault` proves it against **FIPS 180-4, RFC 4231 and RFC
+7914** -- 612 checks, including every single-bit flip of the MAC and of the
+ciphertext. That is why SHA-256 is reimplemented there rather than called from
+the ESP-IDF: a MAC nobody can run on a host is a MAC nobody can prove.
+
+### The Mac half
+
+`tools_local/remote-mac/` -- a Swift LaunchAgent, its build script and its
+launchd plist, with the install steps in its own README. It keeps running
+behind the lock screen, which is the whole reason it is an agent.
+
+### Setting it up
+
+1. On the reader, open **Remote** and press the padlock. With nothing paired it
+   shows a 32-character code in eight groups of four, **once**.
+2. On the Mac, `crossplay-unlock pair`, and type that code and the login
+   password.
+3. Back on the reader, press TYPED IT and choose a PIN of 4 to 12 digits. There
+   is no recovery: forget it and you re-pair.
+
+The PIN is asked once per time the app is opened, and the opened secret lives
+in RAM only -- `onExit` wipes it along with the radio.
+
+### Keyboard layout
+
+HID carries key *positions*, not characters, and the Mac decides what each
+position produces. The reader types a **US layout**. On any other layout the
+letters land but the symbols do not. Nothing comes back over HID, so the
+symptom is a password that silently fails, and there is nothing the reader can
+do about it.
 
 ## The screen is marks, not words
 
@@ -119,14 +208,19 @@ panel, and each one is there because no drawing does its job:
 - the **profile name** in the footer, because no mark distinguishes YouTube
   from IINA from a blind scrub while the seek buttons mean different things
   under each;
-- the **pairing sentence**, shown only while unpaired, because nothing draws
-  "System Settings > Bluetooth". Once connected it collapses to a single
-  bluetooth glyph -- the live controls under it are the rest of the message.
+- the **status sentence**, because nothing draws "System Settings > Bluetooth"
+  and nothing draws "the unlock helper is not running" either. Connected with
+  nothing to report, it collapses to a single bluetooth glyph -- the live
+  controls under it are the rest of the message.
+
+Two screens behind the panel are words by necessity: the **PIN pad**, which
+draws how many digits have been typed and never which, and the **pairing
+code**, which is a code from another machine and cannot be a picture.
 
 `host-tests/ui` asserts the absence directly: it renders the panel and fails if
-`PLAY/PAUSE`, `VOLUME`, `MUTE`, `FWD`, `PREV`, `NEXT`, `SIRI`, `CLAUDE`, `DND`
-or `FOCUS` ever reach it as text. A label creeping back onto a button face is
-invisible in a diff and obvious on the device.
+`PLAY/PAUSE`, `VOLUME`, `MUTE`, `FWD`, `PREV`, `NEXT`, `SIRI`, `CLAUDE`, `DND`,
+`FOCUS`, `UNLOCK` or `LOCK` ever reach it as text. A label creeping back onto a
+button face is invisible in a diff and obvious on the device.
 
 It also taps the centre of every control and asserts that control wins the hit
 test. Registered and reachable are different questions: a button the router
@@ -169,5 +263,7 @@ keys working and being ignored.
 
 Bonding is on, MITM off: macOS pairs a HID peripheral without a passkey prompt
 this way, and the bond is what lets it reconnect by itself. The band's unlink
-button clears the bonds; the Mac has to be told to forget the device too, which
-the confirm screen says.
+button clears the bonds **and the unlock secret with them** -- leaving that
+behind would hand the next Mac to pair a reader that still held the last one's
+key. The Mac has to be told to forget the device too, which the confirm screen
+says.

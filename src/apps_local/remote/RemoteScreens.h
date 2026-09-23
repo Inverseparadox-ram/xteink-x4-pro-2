@@ -34,7 +34,7 @@ enum : fui::ActionId {
   ActionPrevious = 382,
   ActionSiri = 383,
   ActionClaude = 384,
-  ActionDnd = 385,
+  ActionUnlock = 385,
   ActionForward = 386,
   ActionBack = 387,
   ActionVolumeUp = 388,
@@ -44,11 +44,29 @@ enum : fui::ActionId {
   ActionForgetConfirm = 392,
   ActionForgetCancel = 393,
   ActionVolumeDown = 394,
+  // The PIN pad. The digit rides on the action's value the way the comic
+  // number's does, so ten keys cost one action and not ten.
+  ActionPinDigit = 395,
+  ActionPinBack = 396,
+  ActionPinOk = 397,
+  ActionPairDone = 398,
+};
+
+// Which of the three faces the unlock button is wearing. It is the LAST
+// VERIFIED answer, never a local guess: a reader that assumed the Mac was
+// still locked because it locked it would type the password into an open
+// session the first time anyone touched the keyboard.
+enum class UnlockFace : uint8_t {
+  Ask,     // nothing verified -- a question, and a tap asks
+  Unlock,  // the Mac said it is locked
+  Lock,    // the Mac said it is awake
 };
 
 struct RemoteModel {
   // The link state is drawn as a mark. The only words are the ones no mark can
-  // carry: where to look on the Mac when it cannot find the device.
+  // carry: where to look on the Mac when it cannot find the device, and why
+  // the unlock button refused. Set it and the row becomes that sentence; leave
+  // it empty and the row is the mark alone.
   const char* pairingHint = "";
   bool connected = false;
 
@@ -65,6 +83,12 @@ struct RemoteModel {
   // One short word. No mark distinguishes YouTube from IINA from a blind
   // scrub, and the seek buttons mean different things under each.
   const char* profileName = "";
+
+  UnlockFace unlockFace = UnlockFace::Ask;
+
+  // A challenge is in flight. The button's own band carries it, because a
+  // four-second wait with nothing on screen is a button that did nothing.
+  bool unlockBusy = false;
 };
 
 void buildRemote(toybox::Screen& screen, const RemoteModel& model);
@@ -77,5 +101,32 @@ struct ForgetModel {
 };
 
 void buildForgetConfirm(toybox::Screen& screen, const ForgetModel& model);
+
+// --- Unlock ----------------------------------------------------------------
+
+// The PIN pad. Digits only and no letters, because the PIN's whole job is to
+// be typed on a touchscreen in a hurry -- and because what it unseals has no
+// verifier, so its strength comes from the Mac counting wrong answers rather
+// than from its own length.
+struct PinModel {
+  const char* title = "PIN";
+  // One line under the title. Carries the last refusal when there was one:
+  // a wrong PIN is indistinguishable from an unpaired Mac until the Mac says
+  // so, and the screen has to say which it was told.
+  const char* detail = "";
+  uint8_t entered = 0;  // how many digits so far; drawn as marks, never as digits
+  bool canConfirm = false;
+};
+
+void buildPin(toybox::Screen& screen, const PinModel& model);
+
+// The pairing code, shown once. Eight groups of four, because thirty-two
+// unbroken characters is a line nobody types correctly.
+struct PairModel {
+  const char* code = "";  // 32 symbols, no separators; this screen groups them
+  const char* detail = "";
+};
+
+void buildPair(toybox::Screen& screen, const PairModel& model);
 
 }  // namespace remoteui
