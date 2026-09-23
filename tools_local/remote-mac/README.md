@@ -59,9 +59,13 @@ challenges`, then stop it and install the agent:
 
 ```sh
 cp com.crossplay.unlock.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.crossplay.unlock.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.crossplay.unlock.plist
 tail -f /tmp/crossplay-unlock.log
 ```
+
+`bootstrap`, not `load`: the old subcommand reports almost every failure as
+"Load failed: 5: Input/output error", including a plist that is not there.
+To take it back out: `launchctl bootout gui/$(id -u)/com.crossplay.unlock`.
 
 A LaunchAgent keeps running behind the lock screen, which is the whole reason
 it is an agent and not a login item.
