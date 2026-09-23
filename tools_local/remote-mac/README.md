@@ -6,7 +6,9 @@ whether the screen is really locked, and sends the password back encrypted.
 
 Everything here runs on the Mac. Nothing in this folder is built by the
 firmware build, and `check.sh` does not touch it -- it cannot, because Swift,
-CoreBluetooth and the macOS SDK are not on the reader's build host.
+CoreBluetooth and the macOS SDK are not on the reader's build host. It has
+been built and run against a real Mac mini and a real reader; see the log
+below for what that looked like.
 
 ## What it does, and what it deliberately does not
 
@@ -110,6 +112,36 @@ Two characteristics on one service, and every byte is defined by
 `host-tests/remotevault` proves that header against RFC 4231, RFC 7914 and
 FIPS 180-4. If this agent and the reader ever disagree, one of them has drifted
 from it; the vectors say which.
+
+## What a working run looks like
+
+Four lines on startup and two per press. This is a real unlock, end to end:
+
+```text
+[2026-09-23T15:20:22Z] crossplay-unlock running
+[2026-09-23T15:20:28Z] found the reader among the peripherals macOS already has
+[2026-09-23T15:20:28Z] connected
+[2026-09-23T15:20:28Z] listening for challenges
+[2026-09-23T15:29:12Z] unlock: locked, sending
+[2026-09-23T15:29:18Z] status: screen is awake
+```
+
+`found the reader among the peripherals macOS already has` is the line worth
+knowing: a CoreBluetooth central really can talk GATT to the peripheral macOS
+is already holding for HID, so the scan path below it is a fallback that never
+had to run.
+
+The second pair is the unlock itself. `unlock: locked, sending` is this agent
+deciding the screen is genuinely locked and releasing the password; `status:
+screen is awake` six seconds later is the READER asking what happened, and it
+is the only confirmation either side gets that the password was accepted. Six
+seconds is the expected gap: about 1.4s waking the display, then the
+keystrokes, then the reader's 2.5s follow-up delay.
+
+`crossplay-unlock status` answers the same question from this side. Its
+`counter` is the high-water mark of challenges that VERIFIED -- it is bumped
+only after the MAC checks out -- so a number above zero is proof the pairing
+and the PIN are both right.
 
 ## If it does not work
 
