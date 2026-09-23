@@ -37,9 +37,15 @@ early, so a Mac that has been powered off needs its keyboard.
 
 ```sh
 ./build.sh                                # needs Xcode's command line tools
+sudo mkdir -p /usr/local/bin              # Apple Silicon Macs do not ship one
 sudo cp crossplay-unlock /usr/local/bin/
 crossplay-unlock pair                     # asks for the reader's code, then your password
 ```
+
+`/usr/local/bin` is on the default PATH (`/etc/paths` lists it) but nothing
+creates it on a Mac whose Homebrew lives in `/opt/homebrew`, so the copy fails
+with "No such file or directory" until you make it. Keep that path:
+`com.crossplay.unlock.plist` names the binary there.
 
 Run it once in Terminal before installing the agent:
 
