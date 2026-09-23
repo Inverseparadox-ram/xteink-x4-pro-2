@@ -86,6 +86,7 @@ it and you re-pair, which means `crossplay-unlock pair` again with a new code.
 | | |
 | --- | --- |
 | `crossplay-unlock pair` | store the reader's code and this Mac's password |
+| `crossplay-unlock password` | store a new password, keeping the pairing and its counter |
 | `crossplay-unlock status` | what it has, and whether the screen is locked right now |
 | `crossplay-unlock forget` | delete both from the Keychain |
 | `crossplay-unlock run` | serve challenges; what launchd runs |
@@ -151,4 +152,5 @@ and the PIN are both right.
 | "The Mac is connected, but the unlock helper is not running" | HID is up (every other button works) and nothing has subscribed to the challenge characteristic |
 | "Wrong PIN, or this Mac no longer knows this reader" | Exactly those two, and the reader cannot tell them apart -- by design |
 | The log says "replayed" | The counters are out of step. Re-pair |
-| The password is typed but wrong | Non-US keyboard layout, or the password changed since `pair` |
+| The password is typed but wrong | Non-US keyboard layout, or the password changed since `pair` -- `crossplay-unlock password` fixes the second without disturbing the pairing |
+| `status` says `password: missing` after a password reset | The login Keychain was reset with it, which happens when the password is recovered through an Apple ID rather than changed in System Settings. Re-pair |

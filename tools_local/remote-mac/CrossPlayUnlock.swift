@@ -9,10 +9,11 @@
 //
 // Build and install: see README.md next to this file.
 //
-//   crossplay-unlock pair     store the reader's code and this Mac's password
-//   crossplay-unlock status   what it thinks it has
-//   crossplay-unlock forget   delete both from the Keychain
-//   crossplay-unlock run      serve challenges (what launchd runs)
+//   crossplay-unlock pair      store the reader's code and this Mac's password
+//   crossplay-unlock password  store a new password, keeping the pairing
+//   crossplay-unlock status    what it thinks it has
+//   crossplay-unlock forget    delete both from the Keychain
+//   crossplay-unlock run       serve challenges (what launchd runs)
 //
 // Every byte on the wire is defined by src/apps_local/remote/RemoteVault.h in
 // the firmware, and host-tests/remotevault proves that file against RFC 4231,
@@ -430,6 +431,27 @@ func commandPair() {
     print("Paired. Both are in the login Keychain under \(Store.service).")
 }
 
+// Changing the Mac's login password does not touch the pairing, and re-pairing
+// to fix it would mean a new code and a new PIN for something neither of them
+// is wrong about. So this updates the one thing that went stale.
+func commandPassword() {
+    guard Store.get("secret") != nil else {
+        print("Not paired, so there is nothing to keep. Run: crossplay-unlock pair")
+        exit(1)
+    }
+    let password = readLine(prompt: "This Mac's login password: ", secret: true)
+    guard !password.isEmpty else {
+        print("No password, nothing to unlock with.")
+        exit(1)
+    }
+    guard password.utf8.count <= Wire.maxPayload else {
+        print("That password is longer than \(Wire.maxPayload) bytes, which is more than the reader will type.")
+        exit(1)
+    }
+    Store.set("password", Data(password.utf8))
+    print("Stored. The pairing and its counter are untouched, so the reader needs no change.")
+}
+
 func commandStatus() {
     print("secret:   \(Store.get("secret") != nil ? "stored" : "missing")")
     print("password: \(Store.get("password") != nil ? "stored" : "missing")")
@@ -460,10 +482,11 @@ func commandRun() {
 
 switch CommandLine.arguments.dropFirst().first ?? "run" {
 case "pair": commandPair()
+case "password": commandPassword()
 case "status": commandStatus()
 case "forget": commandForget()
 case "run": commandRun()
 default:
-    print("usage: crossplay-unlock [pair|status|forget|run]")
+    print("usage: crossplay-unlock [pair|password|status|forget|run]")
     exit(2)
 }
