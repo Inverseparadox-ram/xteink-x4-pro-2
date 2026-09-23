@@ -90,6 +90,13 @@ shows a 32-character code in eight groups of four, **once**. Type that into
 The PIN seals the secret on the reader's SD card. There is no recovery: forget
 it and you re-pair, which means `crossplay-unlock pair` again with a new code.
 
+Re-pairing generates a **new secret** on the reader and starts its counter over
+at zero, so `pair` resets the replay ledger here to match. It has to: the old
+high-water mark belongs to a conversation that no longer exists, and left in
+place it refuses every challenge the new pairing sends until the reader climbs
+back past it. The reader has no way to be told that, so the symptom is an
+unlock button that verifies fine and never works.
+
 ## Commands
 
 | | |
@@ -160,6 +167,6 @@ and the PIN are both right.
 | The padlock stays a question mark | The agent is not running, or Bluetooth permission was denied. `tail /tmp/crossplay-unlock.log` |
 | "The Mac is connected, but the unlock helper is not running" | HID is up (every other button works) and nothing has subscribed to the challenge characteristic |
 | "Wrong PIN, or this Mac no longer knows this reader" | Exactly those two, and the reader cannot tell them apart -- by design |
-| The log says "replayed" | The counters are out of step. Re-pair |
+| The log says "replayed" | The two counters are out of step, and re-pairing is what USED to cause it -- `pair` now resets this side, so a build from before that fix is the likely reason. Delete `~/Library/Application Support/CrossPlayUnlock/ledger.json`, then `launchctl kickstart -k gui/$(id -u)/com.crossplay.unlock` |
 | The password is typed but wrong | Non-US keyboard layout, or the password changed since `pair` -- `crossplay-unlock password` fixes the second without disturbing the pairing |
 | `status` says `password: missing` after a password reset | The login Keychain was reset with it, which happens when the password is recovered through an Apple ID rather than changed in System Settings. Re-pair |

@@ -208,9 +208,25 @@ final class Ledger {
     func accept(_ counter: UInt64) -> Bool {
         guard counter > highWater else { return false }
         highWater = counter
+        save()
+        return true
+    }
+
+    // A NEW pairing starts a new counter on the reader, so the old high-water
+    // mark belongs to a conversation that no longer exists. Left in place it
+    // refuses every challenge the new pairing sends until the reader climbs
+    // back past it -- and since the reader has no way to be told, that reads
+    // as an unlock button that simply stopped working.
+    func reset() {
+        highWater = 0
+        strikes = 0
+        blockedUntil = .distantPast
+        save()
+    }
+
+    private func save() {
         let json: [String: Any] = ["counter": NSNumber(value: highWater)]
         try? JSONSerialization.data(withJSONObject: json).write(to: path)
-        return true
     }
 
     // A wrong MAC is a wrong PIN or a stranger, and the reader cannot tell
@@ -428,7 +444,9 @@ func commandPair() {
     }
     Store.set("secret", secret)
     Store.set("password", Data(password.utf8))
-    print("Paired. Both are in the login Keychain under \(Store.service).")
+    // Before anything can arrive under the new secret.
+    Ledger().reset()
+    print("Paired. Both are in the login Keychain under \(Store.service), and the replay counter is back to zero.")
 }
 
 // Changing the Mac's login password does not touch the pairing, and re-pairing
@@ -462,6 +480,7 @@ func commandStatus() {
 func commandForget() {
     Store.remove("secret")
     Store.remove("password")
+    Ledger().reset()
     print("Forgotten. Unpair the reader in its own app too.")
 }
 
