@@ -49,10 +49,10 @@ So no screen here shows a state it cannot know:
   muted". A volume step clears it, because a volume key unmutes on the host
   too.
 
-**There is no now-playing display, and there cannot be one over BLE from a
-Mac.** iOS publishes AMS (Apple Media Service), a BLE service that would answer
-exactly those questions; macOS does not expose it. Showing metadata would mean
-a helper running on the Mac pushing it over Wi-Fi, which is a different app.
+**HID alone can never show what is playing.** iOS publishes AMS (Apple Media
+Service), a BLE service that would answer exactly that; macOS does not expose
+it. What changed is that the unlock button put an agent on the Mac with a GATT
+channel back to the reader -- see **Now playing** below.
 
 ## Seek, and why it is a keystroke
 
@@ -150,13 +150,14 @@ broken exactly when someone wants it.
 ### The wire
 
 A second GATT service beside the HID one, because HID is one-way and this needs
-an answer. Two characteristics, both fixed-shape:
+an answer. Three characteristics:
 
 | | |
 | --- | --- |
 | service | `6F1B0A00-9D3C-4F5E-8A77-2B4C1D6E9F01` |
 | challenge (notify) | 58 bytes: version, op, counter, 16-byte nonce, MAC |
 | response (write) | 11-byte head, the sealed password, 32-byte MAC |
+| now playing (write, encrypted link) | see **Now playing** |
 
 Three keys, one per purpose, all `HMAC(secret, label ‖ nonce)`, so the key that
 authenticates a request can never be made to produce a keystream. The password
@@ -196,6 +197,47 @@ position produces. The reader types a **US layout**. On any other layout the
 letters land but the symbols do not. Nothing comes back over HID, so the
 symptom is a password that silently fails, and there is nothing the reader can
 do about it.
+
+## Now playing
+
+The title and artist of whatever Music or Spotify is playing, in the status row
+above the transport. It rides the unlock helper's GATT service as a third
+characteristic, so it needs the helper running and nothing else set up.
+
+**Where it comes from.** Music and Spotify each broadcast a distributed
+notification on every play, pause, stop and track change, with the song in the
+payload. The helper listens to those. No polling, and -- unlike asking either
+app over AppleScript -- no Automation permission prompt.
+
+**What it cannot see: anything else.** A browser playing YouTube broadcasts
+nothing, and the system-wide now-playing API is closed to third-party processes
+on current macOS. So under the YouTube seek profile, the row usually stays
+empty. That is not a fault.
+
+**It appears on the first change after the helper starts.** The helper knows
+only what it has been told since launch, so a song already playing when the
+Mac logged in shows up at the next pause, play or track change. Pressing play
+on the reader is one.
+
+**It never shows a song it can no longer be told about.** When the helper
+unsubscribes or the radio goes down, the reader drops the line. When both
+players report something, the one PLAYING wins over the one paused, newest
+first -- so pausing Spotify while Music plays leaves Music on screen, which is
+what is audible.
+
+**The row never moves the controls.** A long title is cut to one line with an
+ellipsis rather than wrapped, and both lines are reserved even for a song with
+no artist, so the transport sits in the same place for every song. A pairing
+instruction or an unlock refusal takes the row over: those are things to act
+on, and a title is not.
+
+The frame is five fields -- version, state, title length, title, artist length,
+artist -- at most 64 bytes of UTF-8 each, cut at a character and never through
+one. `host-tests/remote` pins the bytes, including a Japanese title whose
+64-byte cut would otherwise split its last character. It carries no MAC because
+it decides nothing: the worst a forged frame could do is print a wrong song,
+and the characteristic requires an encrypted link, which in practice means the
+bonded Mac.
 
 ## The screen is marks, not words
 
@@ -267,3 +309,29 @@ button clears the bonds **and the unlock secret with them** -- leaving that
 behind would hand the next Mac to pair a reader that still held the last one's
 key. The Mac has to be told to forget the device too, which the confirm screen
 says.
+
+### Updating without losing the pairing
+
+**Install new builds with the SD card updater, not the USB full image.** Both
+halves of that sentence matter, and the reason is where the bond lives.
+
+NimBLE keeps Bluetooth bonds in the **NVS partition**, at `0x9000`
+(`CONFIG_BT_NIMBLE_NVS_PERSIST`). A `-full.bin` is written at `0x0` and runs
+straight through to the application, so it writes `0xFF` over all of NVS on the
+way -- checked byte for byte on a real image, all 20,480 bytes of it. The reader
+forgets the Mac; the Mac still remembers the reader; each refuses the other
+until the pairing is redone in both places. Every USB update did this.
+
+**Settings > System > SD Card Firmware Update** writes `firmware.bin` -- the
+application alone -- into the other app slot and flips `otadata`. NVS is never
+in range, so the bond survives and the Mac reconnects on its own. It has no
+version check, so our builds are fine though they all carry the same number: it
+checks the image fits the slot, validates the header, checksum and SHA-256, and
+refuses an image for the wrong chip or board.
+
+The unlock pairing is not affected either way: it lives on the SD card, in
+`/.crosspoint/remote/unlock.bin`.
+
+A USB full flash is still the answer for a first install, for recovery, and
+for any release that changes `partitions.csv` -- the one thing an app-only
+update cannot carry. Expect to pair again after one.

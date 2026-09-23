@@ -32,6 +32,7 @@ enum Wire {
     static let service = CBUUID(string: "6F1B0A00-9D3C-4F5E-8A77-2B4C1D6E9F01")
     static let challenge = CBUUID(string: "6F1B0A01-9D3C-4F5E-8A77-2B4C1D6E9F01")
     static let response = CBUUID(string: "6F1B0A02-9D3C-4F5E-8A77-2B4C1D6E9F01")
+    static let nowPlaying = CBUUID(string: "6F1B0A03-9D3C-4F5E-8A77-2B4C1D6E9F01")
 
     static let version: UInt8 = 1
     static let nonceLen = 16
@@ -262,19 +263,135 @@ func screenIsLocked() -> Bool {
     return (session["CGSSessionScreenIsLocked"] as? Bool) ?? false
 }
 
+// MARK: - Now playing
+
+// What Music and Spotify say about themselves. Both broadcast a distributed
+// notification on every play, pause, stop and track change, with the song in
+// its userInfo -- so this needs no polling and, unlike AppleScript, no
+// Automation permission prompt.
+//
+// What it cannot see: anything else. A browser playing YouTube does not
+// broadcast, and the system-wide now-playing API is closed to third-party
+// processes on current macOS.
+enum NowPlaying {
+    static let version: UInt8 = 1
+    static let fieldMax = 64
+
+    enum State: UInt8 { case nothing = 0, playing = 1, paused = 2 }
+
+    struct Heard {
+        var state: State
+        var title: String
+        var artist: String
+        var at: Date
+    }
+
+    static let sources: [(player: String, notification: String)] = [
+        ("Music", "com.apple.Music.playerInfo"),
+        ("Spotify", "com.spotify.client.PlaybackStateChanged"),
+    ]
+
+    static func heard(from info: [AnyHashable: Any]?) -> Heard {
+        let playerState = info?["Player State"] as? String ?? ""
+        let state: State = playerState == "Playing" ? .playing : (playerState == "Paused" ? .paused : .nothing)
+        return Heard(state: state,
+                     title: info?["Name"] as? String ?? "",
+                     artist: info?["Artist"] as? String ?? "",
+                     at: Date())
+    }
+
+    // The most recent player that is PLAYING wins; failing that, the most
+    // recent that is paused; failing that, nothing. So pausing Spotify while
+    // Music plays leaves Music on the reader, which is what is audible.
+    static func choose(_ heard: [String: Heard]) -> Heard? {
+        let live = heard.values.filter { $0.state == .playing && !$0.title.isEmpty }
+        if let newest = live.max(by: { $0.at < $1.at }) { return newest }
+        let held = heard.values.filter { $0.state == .paused && !$0.title.isEmpty }
+        return held.max(by: { $0.at < $1.at })
+    }
+
+    // Cut at a CHARACTER, never through one: the reader drops a half-character
+    // anyway, but a title that loses its last letter to a byte limit is worse
+    // than one that loses a whole word to an ellipsis on the reader's side.
+    static func clip(_ text: String) -> Data {
+        var out = Data()
+        for ch in text {
+            let bytes = Data(String(ch).utf8)
+            if out.count + bytes.count > fieldMax { break }
+            out.append(bytes)
+        }
+        return out
+    }
+
+    // The layout RemoteCore.h documents and host-tests/remote pins byte for
+    // byte: version, state, title length, title, artist length, artist.
+    static func frame(_ chosen: Heard?) -> Data {
+        guard let chosen = chosen else { return Data([version, State.nothing.rawValue, 0, 0]) }
+        let title = clip(chosen.title)
+        let artist = clip(chosen.artist)
+        var out = Data([version, chosen.state.rawValue, UInt8(title.count)])
+        out.append(title)
+        out.append(UInt8(artist.count))
+        out.append(artist)
+        return out
+    }
+}
+
 // MARK: - The agent
 
 final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private var central: CBCentralManager!
     private var reader: CBPeripheral?
     private var responseCharacteristic: CBCharacteristic?
+    private var nowPlayingCharacteristic: CBCharacteristic?
     private let ledger = Ledger()
     private let secret: Data
+
+    private var heard: [String: NowPlaying.Heard] = [:]
+    private var observers: [NSObjectProtocol] = []
+    // What the reader was last sent. nil means "send whatever is current the
+    // next time there is somewhere to send it", which is the state after every
+    // reconnect: the reader forgets the song when its radio goes down.
+    private var lastSent: Data?
 
     init(secret: Data) {
         self.secret = secret
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
+        let centre = DistributedNotificationCenter.default()
+        for source in NowPlaying.sources {
+            observers.append(centre.addObserver(forName: NSNotification.Name(source.notification), object: nil,
+                                                queue: .main) { [weak self] note in
+                self?.playerChanged(source.player, note.userInfo)
+            })
+        }
+    }
+
+    private func playerChanged(_ player: String, _ info: [AnyHashable: Any]?) {
+        heard[player] = NowPlaying.heard(from: info)
+        sendNowPlaying()
+    }
+
+    private func sendNowPlaying() {
+        let frame = NowPlaying.frame(NowPlaying.choose(heard))
+        guard frame != lastSent else { return }
+        guard let characteristic = nowPlayingCharacteristic, let peripheral = reader else { return }
+        // With a response, so a failure comes back to didWriteValueFor and into
+        // the log rather than vanishing.
+        peripheral.writeValue(frame, for: characteristic, type: .withResponse)
+        lastSent = frame
+        if let chosen = NowPlaying.choose(heard) {
+            log("now playing: \(chosen.title) by \(chosen.artist) (\(chosen.state == .playing ? "playing" : "paused"))")
+        } else {
+            log("now playing: nothing")
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard let error = error else { return }
+        log("write to \(characteristic.uuid) failed: \(error.localizedDescription)")
+        // Try again next time rather than believing the reader has it.
+        if characteristic.uuid == Wire.nowPlaying { lastSent = nil }
     }
 
     func centralManagerDidUpdateState(_ manager: CBCentralManager) {
@@ -317,6 +434,8 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         error: Error?) {
         log("disconnected; waiting for it to come back")
         responseCharacteristic = nil
+        nowPlayingCharacteristic = nil
+        lastSent = nil
         // The reader takes its radio down when the app closes, so a
         // disconnection is normal rather than a failure. Reconnect stays
         // pending until it advertises again.
@@ -328,7 +447,7 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             log("the reader has no unlock service")
             return
         }
-        peripheral.discoverCharacteristics([Wire.challenge, Wire.response], for: service)
+        peripheral.discoverCharacteristics([Wire.challenge, Wire.response, Wire.nowPlaying], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
@@ -339,6 +458,12 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 log("listening for challenges")
             }
             if characteristic.uuid == Wire.response { responseCharacteristic = characteristic }
+            if characteristic.uuid == Wire.nowPlaying {
+                nowPlayingCharacteristic = characteristic
+                // The reader has just (re)connected and knows nothing; tell it.
+                lastSent = nil
+                sendNowPlaying()
+            }
         }
     }
 
@@ -486,7 +611,7 @@ func commandForget() {
 
 // File scope on purpose: CBCentralManager holds its delegate weakly, so an
 // agent kept only in a local would be deallocated the moment commandRun
-// returned into dispatchMain and nothing would ever answer a challenge.
+// returned into the run loop and nothing would ever answer a challenge.
 var runningAgent: Agent?
 
 func commandRun() {
@@ -496,7 +621,10 @@ func commandRun() {
     }
     runningAgent = Agent(secret: secret)
     log("crossplay-unlock running")
-    dispatchMain()
+    // RunLoop, not dispatchMain(): distributed notifications arrive through a
+    // run-loop source, which dispatchMain() never services. The run loop drains
+    // the main queue too, so CoreBluetooth's callbacks still arrive.
+    RunLoop.main.run()
 }
 
 switch CommandLine.arguments.dropFirst().first ?? "run" {

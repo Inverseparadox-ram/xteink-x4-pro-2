@@ -110,6 +110,10 @@ class RemoteActivity final : public Activity {
   // changed it. Zero means nothing is due.
   uint32_t statusDueAt_ = 0;
 
+  // What the Mac last said is playing. Copied out of the link on a change, so
+  // render() reads a value that cannot move under it.
+  remote::NowPlaying nowPlaying_;
+
   // Last time the link state was drawn, so the screen can follow a connection
   // appearing without repainting e-ink on a timer.
   remote::Link lastLink_ = remote::Link::Off;

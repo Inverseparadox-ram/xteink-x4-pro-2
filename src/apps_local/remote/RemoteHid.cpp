@@ -2,6 +2,8 @@
 
 #include <Logging.h>
 
+#include <cstdlib>
+
 #include "RemoteLink.h"
 
 #if defined(CROSSPLAY_BLE_HID)
@@ -418,7 +420,12 @@ void forgetPairings() {
 
 void begin() { LOG_INF(kTag, "sim: no radio; pretending to advertise"); }
 void end() { helper::end(); }
-Link link() { return Link::Advertising; }
+// CROSSPOINT_SIM_REMOTE_CONNECTED=1 draws the connected panel, which is the only
+// one the now-playing row appears on.
+Link link() {
+  const char* env = std::getenv("CROSSPOINT_SIM_REMOTE_CONNECTED");
+  return env != nullptr && env[0] == '1' ? Link::Connected : Link::Advertising;
+}
 bool ready() { return false; }
 bool send(Key) { return false; }
 bool sendChord(const Chord&) { return false; }

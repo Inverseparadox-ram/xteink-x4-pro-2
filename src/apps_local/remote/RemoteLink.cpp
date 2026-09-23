@@ -8,6 +8,8 @@
 #include <esp_random.h>
 #endif
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace remote {
@@ -21,12 +23,14 @@ constexpr const char* kTag = "REMOTE";
 constexpr const char* kServiceUuid = "6f1b0a00-9d3c-4f5e-8a77-2b4c1d6e9f01";
 constexpr const char* kChallengeUuid = "6f1b0a01-9d3c-4f5e-8a77-2b4c1d6e9f01";
 constexpr const char* kResponseUuid = "6f1b0a02-9d3c-4f5e-8a77-2b4c1d6e9f01";
+constexpr const char* kNowPlayingUuid = "6f1b0a03-9d3c-4f5e-8a77-2b4c1d6e9f01";
 
 #if defined(CROSSPLAY_BLE_HID)
 
 NimBLEService* service = nullptr;
 NimBLECharacteristic* challengeOut = nullptr;
 NimBLECharacteristic* responseIn = nullptr;
+NimBLECharacteristic* nowPlayingIn = nullptr;
 
 // Written by the NimBLE host task, read by the activity task. One producer,
 // one consumer, and `answerReady` is set last and cleared first -- so the
@@ -39,10 +43,37 @@ volatile size_t answerLen = 0;
 State state = State::Idle;
 uint32_t askedAt = 0;
 
+// Unlike the answer, now-playing frames arrive whenever the Mac likes -- two
+// track changes can land while the activity is mid-copy -- so this one is
+// guarded properly rather than by flag ordering. The spinlock is right across
+// the S3's two cores and costs a 132-byte memcpy.
+portMUX_TYPE nowLock = portMUX_INITIALIZER_UNLOCKED;
+uint8_t nowFrame[kNowPlayingFrameMax];
+size_t nowLen = 0;
+bool nowPending = false;
+NowPlaying nowShown;
+
+void queueNowPlaying(const uint8_t* data, const size_t len) {
+  if (len > sizeof(nowFrame)) return;
+  taskENTER_CRITICAL(&nowLock);
+  std::memcpy(nowFrame, data, len);
+  nowLen = len;
+  nowPending = true;
+  taskEXIT_CRITICAL(&nowLock);
+}
+
+// A frame meaning "nothing is playing", queued when the helper goes away so
+// the panel does not keep a song from a Mac it can no longer hear.
+void queueNothingPlaying() {
+  const uint8_t nothing[] = {kNowPlayingVersion, static_cast<uint8_t>(NowPlayingState::Nothing), 0, 0};
+  queueNowPlaying(nothing, sizeof(nothing));
+}
+
 class ChallengeCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, const uint16_t value) override {
     subscribed = value != 0;
     LOG_INF(kTag, "unlock helper %s", subscribed ? "subscribed" : "gone");
+    if (!subscribed) queueNothingPlaying();
   }
 };
 
@@ -59,8 +90,16 @@ class ResponseCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+class NowPlayingCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override {
+    const NimBLEAttValue& value = characteristic->getValue();
+    queueNowPlaying(value.data(), value.size());
+  }
+};
+
 ChallengeCallbacks challengeCallbacks;
 ResponseCallbacks responseCallbacks;
+NowPlayingCallbacks nowPlayingCallbacks;
 
 #endif  // CROSSPLAY_BLE_HID
 
@@ -86,12 +125,19 @@ void begin() {
   // WRITE, not WRITE_NR: the answer carries the password, and a write without
   // a response is one the Mac cannot tell arrived.
   responseIn = service->createCharacteristic(kResponseUuid, NIMBLE_PROPERTY::WRITE);
-  if (challengeOut == nullptr || responseIn == nullptr) {
+  // WRITE_ENC: an encrypted link, which here means the Mac that bonded as a
+  // keyboard. Not a secret -- it is a song title -- but it is text on this
+  // screen, and a stranger in Bluetooth range should not get to write any.
+  // CoreBluetooth answers the encryption requirement on its own by encrypting
+  // the link it already has.
+  nowPlayingIn = service->createCharacteristic(kNowPlayingUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
+  if (challengeOut == nullptr || responseIn == nullptr || nowPlayingIn == nullptr) {
     LOG_ERR(kTag, "unlock: could not create the characteristics");
     return;
   }
   challengeOut->setCallbacks(&challengeCallbacks);
   responseIn->setCallbacks(&responseCallbacks);
+  nowPlayingIn->setCallbacks(&nowPlayingCallbacks);
   service->start();
 
   state = State::Idle;
@@ -104,6 +150,8 @@ void end() {
   service = nullptr;
   challengeOut = nullptr;
   responseIn = nullptr;
+  nowPlayingIn = nullptr;
+  queueNothingPlaying();
   subscribed = false;
   answerReady = false;
   answerLen = 0;
@@ -156,6 +204,32 @@ void cancel() {
   state = State::Idle;
 }
 
+bool takeNowPlaying(NowPlaying& out) {
+  uint8_t frame[kNowPlayingFrameMax];
+  size_t len = 0;
+  taskENTER_CRITICAL(&nowLock);
+  const bool pending = nowPending;
+  if (pending) {
+    std::memcpy(frame, nowFrame, nowLen);
+    len = nowLen;
+    nowPending = false;
+  }
+  taskEXIT_CRITICAL(&nowLock);
+  if (!pending) return false;
+
+  // Decoded outside the lock: the parse is the slow part and needs no
+  // protection, since `frame` is ours now.
+  NowPlaying next = nowShown;
+  if (!decodeNowPlaying(frame, len, next)) {
+    LOG_INF(kTag, "now playing: a frame of %u bytes did not parse", static_cast<unsigned>(len));
+    return false;
+  }
+  if (sameNowPlaying(next, nowShown)) return false;
+  nowShown = next;
+  out = nowShown;
+  return true;
+}
+
 void randomBytes(uint8_t* out, const size_t len) {
   for (size_t at = 0; at < len; at += 4) {
     const uint32_t word = esp_random();
@@ -174,6 +248,24 @@ bool ask(const vault::Challenge&) { return false; }
 State poll() { return State::Idle; }
 bool take(vault::Response&) { return false; }
 void cancel() {}
+
+// CROSSPOINT_SIM_NOWPLAYING="Title|Artist" hands the panel one song, so the
+// now-playing row can be rendered and photographed in a simulator that has no
+// radio to hear one. Given once, like a real track change.
+bool takeNowPlaying(NowPlaying& out) {
+  static bool given = false;
+  if (given) return false;
+  const char* env = std::getenv("CROSSPOINT_SIM_NOWPLAYING");
+  if (env == nullptr || env[0] == '\0') return false;
+  given = true;
+  const char* bar = std::strchr(env, '|');
+  const size_t titleLen = bar != nullptr ? static_cast<size_t>(bar - env) : std::strlen(env);
+  out = NowPlaying{};
+  out.state = NowPlayingState::Playing;
+  std::snprintf(out.title, sizeof(out.title), "%.*s", static_cast<int>(titleLen), env);
+  if (bar != nullptr) std::snprintf(out.artist, sizeof(out.artist), "%s", bar + 1);
+  return true;
+}
 
 void randomBytes(uint8_t* out, const size_t len) {
   // Never used to seal anything here -- the simulator has no host to answer --

@@ -95,11 +95,124 @@ static void testTheClaudeQueryIsTypeable() {
   }
 }
 
+// --- Now playing -----------------------------------------------------------
+
+static remote::NowPlaying track(const remote::NowPlayingState state, const char* title, const char* artist) {
+  remote::NowPlaying np;
+  np.state = state;
+  std::snprintf(np.title, sizeof(np.title), "%s", title);
+  std::snprintf(np.artist, sizeof(np.artist), "%s", artist);
+  return np;
+}
+
+// The bytes the Swift helper has to produce, pinned. If this test changes, the
+// helper has to change with it or the reader stops understanding it.
+static void testTheNowPlayingFrameIsPinnedByteForByte() {
+  const remote::NowPlaying np = track(remote::NowPlayingState::Playing, "Hey", "Me");
+  uint8_t frame[remote::kNowPlayingFrameMax];
+  const size_t len = remote::encodeNowPlaying(np, frame, sizeof(frame));
+  const uint8_t want[] = {1, 1, 3, 'H', 'e', 'y', 2, 'M', 'e'};
+  CHECK(len == sizeof(want), "frame is %zu bytes, want %zu", len, sizeof(want));
+  CHECK(std::memcmp(frame, want, sizeof(want)) == 0, "frame bytes match the documented layout");
+
+  remote::NowPlaying back;
+  CHECK(remote::decodeNowPlaying(frame, len, back), "a frame it wrote is a frame it reads");
+  CHECK(remote::sameNowPlaying(np, back), "and it round-trips");
+  CHECK(back.present(), "a playing track with a title is worth drawing");
+}
+
+// A frame that fails to parse must leave what is on screen alone. Blanking it
+// would read as the music stopping; half-overwriting it would print a title
+// from one song beside the artist of another.
+static void testABadFrameChangesNothing() {
+  remote::NowPlaying shown = track(remote::NowPlayingState::Playing, "Keep", "This");
+  const remote::NowPlaying before = shown;
+
+  const uint8_t wrongVersion[] = {2, 1, 1, 'x', 0};
+  const uint8_t badState[] = {1, 7, 1, 'x', 0};
+  const uint8_t titleOverruns[] = {1, 1, 9, 'x', 0};
+  const uint8_t trailingJunk[] = {1, 1, 1, 'x', 0, 'z'};
+  const uint8_t tooShort[] = {1, 1, 0};
+  uint8_t tooLong[remote::kNowPlayingFrameMax + 1] = {1, 1, 0, 0};
+
+  CHECK(!remote::decodeNowPlaying(wrongVersion, sizeof(wrongVersion), shown), "a version it does not speak");
+  CHECK(!remote::decodeNowPlaying(badState, sizeof(badState), shown), "a state it does not know");
+  CHECK(!remote::decodeNowPlaying(titleOverruns, sizeof(titleOverruns), shown), "a title longer than the frame");
+  CHECK(!remote::decodeNowPlaying(trailingJunk, sizeof(trailingJunk), shown), "bytes after the artist");
+  CHECK(!remote::decodeNowPlaying(tooShort, sizeof(tooShort), shown), "a frame with no artist length");
+  CHECK(!remote::decodeNowPlaying(tooLong, sizeof(tooLong), shown), "a frame longer than any valid one");
+  CHECK(!remote::decodeNowPlaying(nullptr, 4, shown), "no frame at all");
+  CHECK(remote::sameNowPlaying(shown, before), "and after all of that the screen still says what it said");
+}
+
+// Nothing playing clears the line, and a frame that says so carries no text
+// the reader should believe even if a buggy sender included some.
+static void testNothingPlayingClearsTheLine() {
+  const uint8_t nothing[] = {1, 0, 3, 'o', 'l', 'd', 0};
+  remote::NowPlaying np = track(remote::NowPlayingState::Playing, "Old", "Song");
+  CHECK(remote::decodeNowPlaying(nothing, sizeof(nothing), np), "a Nothing frame parses");
+  CHECK(np.state == remote::NowPlayingState::Nothing, "and says nothing is playing");
+  CHECK(np.title[0] == '\0' && np.artist[0] == '\0', "with no stale text left behind");
+  CHECK(!np.present(), "so the row draws nothing");
+
+  const remote::NowPlaying untitled = track(remote::NowPlayingState::Playing, "", "Someone");
+  CHECK(!untitled.present(), "a player reporting Playing with no name has nothing to show");
+
+  const remote::NowPlaying paused = track(remote::NowPlayingState::Paused, "Held", "");
+  CHECK(paused.present(), "a paused track is still the one that is loaded, so it stays");
+}
+
+// Titles are cut at 64 BYTES, and a byte limit is exactly where a Japanese or
+// an accented title splits a character in half. Half a character is a glyph
+// the font draws as garbage, so the cut has to fall on a boundary.
+static void testALongTitleIsCutOnACharacterNeverThroughOne() {
+  // U+3042 HIRAGANA A is three bytes. Twenty-two of them is 66 bytes, so a
+  // plain 64-byte cut would leave one and two-thirds of the last character.
+  std::string hiragana;
+  for (int i = 0; i < 22; ++i) hiragana += "\xE3\x81\x82";
+  remote::NowPlaying np;
+  np.state = remote::NowPlayingState::Playing;
+  std::memcpy(np.title, hiragana.data(), remote::kNowPlayingFieldMax);
+  np.title[remote::kNowPlayingFieldMax] = '\0';
+
+  uint8_t frame[remote::kNowPlayingFrameMax];
+  const size_t len = remote::encodeNowPlaying(np, frame, sizeof(frame));
+  CHECK(len > 0, "a long title still encodes");
+  CHECK(frame[2] == 63, "cut to 63 bytes -- 21 whole characters -- not 64, got %u", frame[2]);
+
+  remote::NowPlaying back;
+  CHECK(remote::decodeNowPlaying(frame, len, back), "and decodes");
+  CHECK(std::strlen(back.title) == 63, "with no half-character left on the end");
+
+  CHECK(remote::utf8CompleteLength("ab", 2) == 2, "ASCII is always complete");
+  CHECK(remote::utf8CompleteLength("\xC3\xA9", 2) == 2, "a whole e-acute is kept");
+  CHECK(remote::utf8CompleteLength("a\xC3", 2) == 1, "half an e-acute is dropped");
+  CHECK(remote::utf8CompleteLength("a\xE3\x81", 3) == 1, "two-thirds of a kana is dropped");
+  CHECK(remote::utf8CompleteLength("\xF0\x9F\x8E\xB5", 4) == 4, "a whole emoji is kept");
+  CHECK(remote::utf8CompleteLength("\xF0\x9F\x8E", 3) == 0, "three-quarters of one is not");
+  CHECK(remote::utf8CompleteLength("", 0) == 0, "nothing is nothing");
+}
+
+// A newline in a track name is the realistic control character, and one that
+// reached the renderer would push the artist line off the row.
+static void testControlCharactersNeverReachTheScreen() {
+  const uint8_t frame[] = {1, 1, 5, 'A', '\n', 'B', '\t', 'C', 1, '\r'};
+  remote::NowPlaying np;
+  CHECK(remote::decodeNowPlaying(frame, sizeof(frame), np), "a title with control characters parses");
+  CHECK(std::strcmp(np.title, "A B C") == 0, "and they become spaces, got '%s'", np.title);
+  CHECK(std::strcmp(np.artist, " ") == 0, "in the artist too");
+}
+
 int main() {
   testOnlyTheProfileThatKnowsTheNumbersPrintsThem();
   testBrowserSeekTypesTheYouTubeKeys();
   testSiriAndClaudeShareCommandSpace();
   testTheClaudeQueryIsTypeable();
+  testTheNowPlayingFrameIsPinnedByteForByte();
+  testABadFrameChangesNothing();
+  testNothingPlayingClearsTheLine();
+  testALongTitleIsCutOnACharacterNeverThroughOne();
+  testControlCharactersNeverReachTheScreen();
   std::printf("%s  remote core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;
 }

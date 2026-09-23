@@ -35,6 +35,12 @@ Given that, the exchange buys three things:
 It does nothing at the FileVault pre-boot screen: Bluetooth is not up that
 early, so a Mac that has been powered off needs its keyboard.
 
+It also tells the reader **what is playing**: the title and artist from Music
+or Spotify, which both broadcast a notification on every change. That needs no
+extra permission. It cannot see a browser playing YouTube -- nothing on current
+macOS will tell a third-party process about that -- and it learns a song only
+at the first play, pause or track change after it starts.
+
 ## Install
 
 ```sh
@@ -125,6 +131,7 @@ Two characteristics on one service, and every byte is defined by
 | service | `6F1B0A00-9D3C-4F5E-8A77-2B4C1D6E9F01` |
 | challenge (notify) | `6F1B0A01-...` -- 58 bytes, reader to Mac |
 | response (write) | `6F1B0A02-...` -- 11 bytes plus payload plus 32, Mac to reader |
+| now playing (write) | `6F1B0A03-...` -- up to 132 bytes, Mac to reader; `RemoteCore.h` has the layout |
 
 `host-tests/remotevault` proves that header against RFC 4231, RFC 7914 and
 FIPS 180-4. If this agent and the reader ever disagree, one of them has drifted
@@ -155,6 +162,18 @@ is the only confirmation either side gets that the password was accepted. Six
 seconds is the expected gap: about 1.4s waking the display, then the
 keystrokes, then the reader's 2.5s follow-up delay.
 
+Now playing adds one line per change, and one when the reader reconnects,
+because the reader forgets the song whenever its radio goes down:
+
+```text
+[2026-09-23T16:02:40Z] now playing: Harvest Moon by Neil Young (playing)
+[2026-09-23T16:05:51Z] now playing: Harvest Moon by Neil Young (paused)
+```
+
+A line saying `write to 6F1B0A03-... failed` means the reader refused the
+frame, which should only happen if the link was not encrypted; the helper
+retries on the next change.
+
 `crossplay-unlock status` answers the same question from this side. Its
 `counter` is the high-water mark of challenges that VERIFIED -- it is bumped
 only after the MAC checks out -- so a number above zero is proof the pairing
@@ -167,6 +186,7 @@ and the PIN are both right.
 | The padlock stays a question mark | The agent is not running, or Bluetooth permission was denied. `tail /tmp/crossplay-unlock.log` |
 | "The Mac is connected, but the unlock helper is not running" | HID is up (every other button works) and nothing has subscribed to the challenge characteristic |
 | "Wrong PIN, or this Mac no longer knows this reader" | Exactly those two, and the reader cannot tell them apart -- by design |
+| No song on the reader | Nothing has played, paused or changed track since the helper started, or the player is a browser. Press play |
 | The log says "replayed" | The two counters are out of step, and re-pairing is what USED to cause it -- `pair` now resets this side, so a build from before that fix is the likely reason. Delete `~/Library/Application Support/CrossPlayUnlock/ledger.json`, then `launchctl kickstart -k gui/$(id -u)/com.crossplay.unlock` |
 | The password is typed but wrong | Non-US keyboard layout, or the password changed since `pair` -- `crossplay-unlock password` fixes the second without disturbing the pairing |
 | `status` says `password: missing` after a password reset | The login Keychain was reset with it, which happens when the password is recovered through an Apple ID rather than changed in System Settings. Re-pair |

@@ -84,6 +84,13 @@ struct RemoteModel {
   // scrub, and the seek buttons mean different things under each.
   const char* profileName = "";
 
+  // What the Mac says is playing, from the unlock helper. Empty when nothing
+  // is, or when no helper is there to say. Drawn in the status row only when
+  // that row has nothing more urgent to carry: a pairing instruction or an
+  // unlock refusal is something to act on, and a song title is not.
+  const char* nowTitle = "";
+  const char* nowArtist = "";
+
   UnlockFace unlockFace = UnlockFace::Ask;
 
   // A challenge is in flight. The button's own band carries it, because a

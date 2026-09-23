@@ -9824,6 +9824,79 @@ void testTheStatusRowCanCarryTheUnlockMessage() {
   CHECK(!out.interactions.overflowed());
 }
 
+// Now playing takes the status row only when nothing more urgent wants it,
+// and it must never cost the panel a control. A title is information; a
+// pairing instruction or an unlock refusal is something to act on.
+void testNowPlayingYieldsToAnythingActionable() {
+  Rendered playing;
+  remoteui::RemoteModel model;
+  model.connected = true;
+  model.profileName = "YOUTUBE";
+  model.nowTitle = "Harvest Moon";
+  model.nowArtist = "Neil Young";
+  buildTheRemote(playing, model);
+  CHECK(drewText(playing, "Harvest Moon"));
+  CHECK(drewText(playing, "Neil Young"));
+  for (const fui::ActionId action :
+       {remoteui::ActionPlayPause, remoteui::ActionNext, remoteui::ActionPrevious, remoteui::ActionUnlock,
+        remoteui::ActionMute, remoteui::ActionVolumeUp, remoteui::ActionProfile}) {
+    CHECK(playing.has(action));
+  }
+  CHECK(!playing.interactions.overflowed());
+
+  // An unlock refusal wins the row.
+  Rendered refused;
+  model.pairingHint = "The Mac is connected, but the unlock helper is not running.";
+  buildTheRemote(refused, model);
+  CHECK(drewText(refused, "unlock helper"));
+  CHECK(!drewText(refused, "Harvest Moon"));
+
+  // And a remote that is not connected shows how to connect, never a song it
+  // can no longer be told about.
+  Rendered offline;
+  model.connected = false;
+  model.pairingHint = "On the Mac: System Settings > Bluetooth, then pick it.";
+  buildTheRemote(offline, model);
+  CHECK(drewText(offline, "System Settings"));
+  CHECK(!drewText(offline, "Harvest Moon"));
+}
+
+// A title longer than the row is cut with an ellipsis on one line. Wrapping it
+// would push the transport down by a line whenever a long song came on, so the
+// controls under a thumb would move between two taps.
+void testALongTitleIsCutNotWrapped() {
+  Rendered shortTitle;
+  remoteui::RemoteModel model;
+  model.connected = true;
+  model.profileName = "YOUTUBE";
+  model.nowTitle = "Hi";
+  model.nowArtist = "Band";
+  buildTheRemote(shortTitle, model);
+
+  Rendered longTitle;
+  model.nowTitle =
+      "The Great Gig in the Sky (Live at Earls Court 1994, Remastered Edition With Extra Words On The End)";
+  buildTheRemote(longTitle, model);
+  CHECK(drewText(longTitle, "\xE2\x80\xA6") || drewText(longTitle, "..."));
+
+  // The transport sits exactly where it sat under a two-letter title.
+  auto rectOf = [](const Rendered& r, const fui::ActionId action) {
+    for (size_t i = 0; i < r.interactions.count(); ++i) {
+      if (r.interactions.data()[i].action == action) return r.interactions.data()[i].rect;
+    }
+    return fui::Rect{};
+  };
+  CHECK(rectOf(shortTitle, remoteui::ActionPlayPause).y == rectOf(longTitle, remoteui::ActionPlayPause).y);
+  CHECK(rectOf(shortTitle, remoteui::ActionProfile).y == rectOf(longTitle, remoteui::ActionProfile).y);
+
+  // Nor when a song has no artist -- a podcast episode, a voice memo.
+  Rendered noArtist;
+  model.nowTitle = "Episode 12";
+  model.nowArtist = "";
+  buildTheRemote(noArtist, model);
+  CHECK(rectOf(shortTitle, remoteui::ActionPlayPause).y == rectOf(noArtist, remoteui::ActionPlayPause).y);
+}
+
 // The PIN pad: twelve keys, and the two that are not digits are the two that
 // can be dead. A disabled button registers no hit rect at all, so this is the
 // check that they come BACK when they should.
@@ -14233,6 +14306,8 @@ int main() {
   testSeekNumbersAppearOnlyWhereTheProfileKeepsThem();
   testThePairingSentenceAppearsOnlyWhenItIsNeeded();
   testTheUnlockButtonIsLiveInEveryFace();
+  testNowPlayingYieldsToAnythingActionable();
+  testALongTitleIsCutNotWrapped();
   testTheStatusRowCanCarryTheUnlockMessage();
   testThePinPadEnablesOnlyWhatCanBePressed();
   testThePairingCodeIsGrouped();

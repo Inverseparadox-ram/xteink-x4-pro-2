@@ -531,6 +531,14 @@ void RemoteActivity::loop() {
     remote::setBattery(static_cast<uint8_t>(powerManager.getBatteryPercentage()));
   }
   pollChallenge();
+  // A track change is the one thing the Mac pushes unprompted. The link
+  // reports only CHANGES, so this repaints on a new song and never on a timer.
+  remote::NowPlaying next;
+  if (remote::helper::takeNowPlaying(next)) {
+    RenderLock lock(*this);
+    nowPlaying_ = next;
+    requestUpdate();
+  }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (phase_ != Phase::Remote) {
@@ -720,6 +728,10 @@ void RemoteActivity::render(RenderLock&&) {
       // Connected, but the unlock button has something to report that its own
       // mark cannot carry.
       model.pairingHint = unlockDetail_;
+    }
+    if (nowPlaying_.present()) {
+      model.nowTitle = nowPlaying_.title;
+      model.nowArtist = nowPlaying_.artist;
     }
     model.forwardSeconds = remote::forwardSeconds(profile_);
     model.backSeconds = remote::backSeconds(profile_);

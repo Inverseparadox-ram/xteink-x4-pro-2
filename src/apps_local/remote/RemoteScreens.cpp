@@ -113,7 +113,32 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
   // the second fails the row has to use words.
   const int16_t statusSize = 32;
   const bool haveWords = model.pairingHint != nullptr && model.pairingHint[0] != '\0';
-  if (!haveWords) {
+  const bool haveSong = !haveWords && model.connected && model.nowTitle != nullptr && model.nowTitle[0] != '\0';
+  if (haveSong) {
+    // Title over artist, beside the connected mark. One line each and cut with
+    // an ellipsis rather than wrapped: this row sits above the transport, and
+    // a title that grew a second line would push every control down with it.
+    const fui::TextStyle titleStyle = plain(toybox::kUiFont, fui::TextAlign::Left, fui::Color::Black, 1);
+    const fui::TextStyle artistStyle = plain(toybox::kSmallFont, fui::TextAlign::Left, fui::Color::Black, 1);
+    const int16_t titleH = screen.target().lineHeight(toybox::kUiFont);
+    const int16_t artistH = screen.target().lineHeight(toybox::kSmallFont);
+    const int16_t textW = static_cast<int16_t>(width - statusSize - gutter);
+    const std::string title = toybox::fitLines(screen.target(), model.nowTitle, textW, 1, titleStyle);
+    screen.target().text(fui::makeRect(toybox::kMargin, y, textW, titleH), title.c_str(), titleStyle);
+    const bool haveArtist = model.nowArtist != nullptr && model.nowArtist[0] != '\0';
+    if (haveArtist) {
+      const std::string artist = toybox::fitLines(screen.target(), model.nowArtist, textW, 1, artistStyle);
+      screen.target().text(fui::makeRect(toybox::kMargin, static_cast<int16_t>(y + titleH), textW, artistH),
+                           artist.c_str(), artistStyle);
+    }
+    screen.target().bitmap(
+        fui::makeRect(static_cast<int16_t>(toybox::kMargin + width - statusSize), y, statusSize, statusSize),
+        fui::bitmapFromIcon(icon_rc_btok_32), fui::BitmapMode::Contain, fui::Paint::solid(fui::Color::Black));
+    // Both lines reserved even when there is no artist, so the controls sit in
+    // the same place for every song rather than jumping when one lacks a name.
+    const int16_t rowH = static_cast<int16_t>(titleH + artistH);
+    y = static_cast<int16_t>(y + (rowH > statusSize ? rowH : statusSize) + gutter);
+  } else if (!haveWords) {
     screen.target().bitmap(
         fui::makeRect(static_cast<int16_t>(toybox::kMargin + width - statusSize), y, statusSize, statusSize),
         fui::bitmapFromIcon(model.connected ? icon_rc_btok_32 : icon_rc_bt_32), fui::BitmapMode::Contain,

@@ -11,10 +11,11 @@
 // holds the paired secret, and that its screen is actually locked. Neither
 // fact can travel over a HID input report, so this service carries them.
 //
-// Two characteristics and nothing else:
+// Three characteristics and nothing else:
 //
-//   CHALLENGE  notify   the reader's 58-byte request
-//   RESPONSE   write    the Mac's answer, up to 139 bytes
+//   CHALLENGE   notify   the reader's 58-byte request
+//   RESPONSE    write    the Mac's answer, up to 139 bytes
+//   NOWPLAYING  write    what Music or Spotify is playing; see RemoteCore.h
 //
 // Both directions are authenticated by RemoteVault, so the service itself can
 // stay as dumb as it looks: it moves bytes and reports whether any arrived.
@@ -30,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "RemoteCore.h"
 #include "RemoteVault.h"
 
 namespace remote {
@@ -83,6 +85,12 @@ bool take(vault::Response& out);
 
 // Abandons whatever is in flight.
 void cancel();
+
+// The latest now-playing frame, decoded. True only when it CHANGED since the
+// last call, so the activity repaints e-ink on a track change and never on a
+// timer. Cleared -- and reported as a change -- when the helper goes away, so
+// the panel never shows a song from a Mac it can no longer hear.
+bool takeNowPlaying(NowPlaying& out);
 
 // The hardware entropy source, wrapped here so the activity need not include
 // an ESP header to build a nonce. A nonce drawn from millis() would repeat
