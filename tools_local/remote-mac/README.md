@@ -38,11 +38,20 @@ early, so a Mac that has been powered off needs its keyboard.
 ## Install
 
 ```sh
-./build.sh                                # needs Xcode's command line tools
-sudo mkdir -p /usr/local/bin              # Apple Silicon Macs do not ship one
+./build.sh
+sudo mkdir -p /usr/local/bin
 sudo cp crossplay-unlock /usr/local/bin/
-crossplay-unlock pair                     # asks for the reader's code, then your password
+crossplay-unlock pair
 ```
+
+`./build.sh` needs Xcode's command line tools (`xcode-select --install`), and
+`pair` asks for the reader's code and then this Mac's password.
+
+No `#` comments on the command lines here, and none anywhere else in this file,
+because these get pasted into a shell rather than read. **zsh does not treat
+`#` as a comment when it is interactive** -- `interactive_comments` is off by
+default -- so a commented `sudo mkdir -p /usr/local/bin` creates directories
+called `#`, `Apple` and `Silicon` in whatever folder you are standing in.
 
 `/usr/local/bin` is on the default PATH (`/etc/paths` lists it) but nothing
 creates it on a Mac whose Homebrew lives in `/opt/homebrew`, so the copy fails
