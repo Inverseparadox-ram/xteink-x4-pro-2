@@ -1,5 +1,5 @@
-// Freestanding tests for RemoteCore: the seek profiles and the three Mac
-// shortcuts.
+// Freestanding tests for RemoteCore: the seek profiles, the hold key, the
+// unlock combination and the frames the Mac helper speaks.
 //
 // The thing under test is HONESTY. This app cannot read anything back from the
 // host -- not the track, not the volume, not whether the music is playing --
@@ -67,32 +67,6 @@ static void testBrowserSeekTypesTheYouTubeKeys() {
   // focus.
   CHECK(remote::forwardChord(remote::Profile::MediaKey).key == 0, "the scrub profile sends no keystroke");
   CHECK(remote::backChord(remote::Profile::MediaKey).key == 0, "in both directions");
-}
-
-// Siri and Claude ride the SAME chord, and only the hold tells them apart --
-// which is exactly how macOS itself separates Siri from Spotlight. If these
-// ever diverge, one of the two buttons is sending something a stock Mac has
-// never been told about.
-static void testSiriAndClaudeShareCommandSpace() {
-  const remote::KeyChord cmdSpace = remote::commandSpace();
-  CHECK(cmdSpace.key == 0x2C, "the key is Space, got 0x%02X", cmdSpace.key);
-  CHECK(cmdSpace.modifiers == 8, "with Command and nothing else, got %d", cmdSpace.modifiers);
-
-  // Long enough that macOS reads it as a hold rather than a Spotlight tap, and
-  // with margin for the BLE round trip at both ends.
-  CHECK(remote::kSiriHoldMs >= 1000, "the Siri hold clears macOS's own one second");
-}
-
-// The Claude button types this into Spotlight, so it has to be typeable: the
-// keyboard report this app builds covers letters, digits and space, and
-// nothing else.
-static void testTheClaudeQueryIsTypeable() {
-  const char* query = remote::kClaudeQuery;
-  CHECK(query != nullptr && query[0] != '\0', "there is something to type");
-  for (const char* c = query; *c != '\0'; ++c) {
-    const bool typeable = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == ' ';
-    CHECK(typeable, "'%c' is a character the keyboard report can carry", *c);
-  }
 }
 
 // --- Now playing -----------------------------------------------------------
@@ -203,11 +177,79 @@ static void testControlCharactersNeverReachTheScreen() {
   CHECK(std::strcmp(np.artist, " ") == 0, "in the artist too");
 }
 
+// --- The hold button, the combination, the microphone ----------------------
+
+static void testTheHoldButtonIsF8() {
+  CHECK(remote::kHoldKeyUsage == 0x41, "HID keyboard usage 0x41 is F8, got 0x%02X", remote::kHoldKeyUsage);
+}
+
+// The combination reaches the vault as a digit string, and a short entry must
+// never reach it at all: every attempt the reader makes is a guess the Mac
+// counts, and ten wrong ones lock the helper until someone is at the Mac.
+static void testTheCombinationBecomesThePinTheVaultSeals() {
+  using remote::SideKey;
+  const SideKey keys[remote::kComboLength] = {SideKey::Left,  SideKey::Right, SideKey::Right, SideKey::Left,
+                                              SideKey::Right, SideKey::Left,  SideKey::Left,  SideKey::Right};
+  char pin[remote::kComboLength + 1];
+  CHECK(remote::comboToPin(keys, remote::kComboLength, pin, sizeof(pin)), "eight presses make a PIN");
+  CHECK(std::strcmp(pin, "12212112") == 0, "left is 1 and right is 2, in order, got %s", pin);
+
+  CHECK(!remote::comboToPin(keys, remote::kComboLength - 1, pin, sizeof(pin)), "seven presses are not a guess");
+  CHECK(!remote::comboToPin(keys, remote::kComboLength + 1, pin, sizeof(pin)), "nine are not either");
+  CHECK(!remote::comboToPin(keys, remote::kComboLength, pin, remote::kComboLength), "a buffer with no room to end it");
+
+  // Order matters: the same presses in another order are another combination.
+  const SideKey swapped[remote::kComboLength] = {SideKey::Right, SideKey::Left, SideKey::Right, SideKey::Left,
+                                                 SideKey::Right, SideKey::Left, SideKey::Left,  SideKey::Right};
+  char other[remote::kComboLength + 1];
+  remote::comboToPin(swapped, remote::kComboLength, other, sizeof(other));
+  CHECK(std::strcmp(pin, other) != 0, "swapping two presses changes the PIN");
+
+  // Long enough that guessing is the Mac's problem rather than the reader's:
+  // 2^8 = 256, and the helper stops answering after ten wrong in a row.
+  CHECK(remote::kComboLength >= 8, "at least eight presses");
+}
+
+static void testTheMicrophoneFramesArePinned() {
+  uint8_t frame[remote::kCommandLen];
+  remote::encodeCommand(remote::MacCommand::MuteMicrophones, frame);
+  CHECK(frame[0] == 1 && frame[1] == 0x01, "mute is [1, 1]");
+  remote::encodeCommand(remote::MacCommand::UnmuteMicrophones, frame);
+  CHECK(frame[0] == 1 && frame[1] == 0x02, "unmute is [1, 2]");
+
+  remote::MacCommand command = remote::MacCommand::MuteMicrophones;
+  CHECK(remote::decodeCommand(frame, sizeof(frame), command), "a frame it wrote is one it reads");
+  CHECK(command == remote::MacCommand::UnmuteMicrophones, "and it round-trips");
+  const uint8_t unknown[] = {1, 0x7F};
+  CHECK(!remote::decodeCommand(unknown, sizeof(unknown), command), "a command nobody defined is refused");
+  const uint8_t future[] = {2, 0x01};
+  CHECK(!remote::decodeCommand(future, sizeof(future), command), "and so is a version nobody speaks");
+
+  uint8_t state[remote::kMacStateLen];
+  remote::MacState muted;
+  muted.microphonesMuted = true;
+  remote::encodeMacState(muted, state);
+  CHECK(state[0] == 1 && state[1] == 0x01, "muted is [1, 1]");
+
+  remote::MacState heard;
+  CHECK(!heard.known, "before anything is heard the button claims nothing");
+  CHECK(remote::decodeMacState(state, sizeof(state), heard), "a state frame decodes");
+  CHECK(heard.known && heard.microphonesMuted, "and says the microphones are muted");
+
+  // A newer helper might grow the frame. Refusing it keeps an unknown flag
+  // from ever being read as a known one.
+  remote::MacState untouched;
+  const uint8_t longer[] = {1, 0x01, 0x00};
+  CHECK(!remote::decodeMacState(longer, sizeof(longer), untouched), "a longer frame is refused");
+  CHECK(!untouched.known, "and changes nothing");
+}
+
 int main() {
   testOnlyTheProfileThatKnowsTheNumbersPrintsThem();
   testBrowserSeekTypesTheYouTubeKeys();
-  testSiriAndClaudeShareCommandSpace();
-  testTheClaudeQueryIsTypeable();
+  testTheHoldButtonIsF8();
+  testTheCombinationBecomesThePinTheVaultSeals();
+  testTheMicrophoneFramesArePinned();
   testTheNowPlayingFrameIsPinnedByteForByte();
   testABadFrameChangesNothing();
   testNothingPlayingClearsTheLine();

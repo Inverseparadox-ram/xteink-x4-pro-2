@@ -36,26 +36,24 @@ class RemoteActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  enum class Phase : uint8_t { Remote, Forget, Pin, Pair };
-
-  // What the PIN being typed is for. The same twelve keys either unseal a
-  // pairing that exists or set the one that is about to.
-  enum class PinPurpose : uint8_t { Open, Choose };
+  enum class Phase : uint8_t { Remote, Forget, Unlocking, ComboSet, Pair };
 
   void press(remote::Key key);
   void seek(bool forward);
   void volumeStep(bool up);
   void toggleMute();
-  void openClaude();
+  void toggleHeldKey();
+  void toggleMicrophones();
   void cycleProfile();
 
   // --- Unlock ---------------------------------------------------------------
 
   void tapUnlock();
   void beginPairing();
-  void pinDigit(int digit);
-  void pinBackspace();
-  void pinConfirm();
+  void sideKey(remote::SideKey key);
+  void resetCombo();
+  void startComboSet();
+  void setupKey(remote::SideKey key);
   bool startChallenge(remote::vault::Op op);
   void pollChallenge();
   void finishUnlock(const remote::vault::Response& response);
@@ -92,10 +90,16 @@ class RemoteActivity final : public Activity {
   uint8_t freshSecret_[remote::vault::kSecretLen] = {};
   char pairCode_[33] = {};
 
-  char pin_[remote::vault::kPinMaxLen + 1] = {};
-  uint8_t pinLen_ = 0;
-  PinPurpose pinPurpose_ = PinPurpose::Open;
-  const char* pinDetail_ = "";
+  // The side keys pressed so far, on the unlocking screen or while choosing.
+  // Wiped the moment eight have been turned into a secret, and on every exit.
+  remote::SideKey combo_[remote::kComboLength] = {};
+  uint8_t comboLen_ = 0;
+  uint32_t lastKeyAt_ = 0;
+
+  // Choosing: the first eight, held until the second eight match them.
+  remote::SideKey firstCombo_[remote::kComboLength] = {};
+  bool confirming_ = false;
+  const char* comboDetail_ = "";
 
   // The last VERIFIED answer, and nothing else. A reader that remembered what
   // it had done rather than what it had been told would be wrong the first
@@ -113,6 +117,9 @@ class RemoteActivity final : public Activity {
   // What the Mac last said is playing. Copied out of the link on a change, so
   // render() reads a value that cannot move under it.
   remote::NowPlaying nowPlaying_;
+
+  // What the Mac last reported about its microphones.
+  remote::MacState macState_;
 
   // Last time the link state was drawn, so the screen can follow a connection
   // appearing without repainting e-ink on a timer.

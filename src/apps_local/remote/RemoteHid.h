@@ -84,31 +84,29 @@ const char* deviceName();
 // swallowing.
 bool send(Key key);
 
-// Sends a keyboard chord the same way. Used for seek and for the three
-// shortcut buttons, none of which has a media key.
+// Sends a keyboard chord the same way. Used for seek and for the lock chord,
+// neither of which has a media key.
 bool sendChord(const Chord& chord);
-
-// Holds a chord down for `ms`. macOS distinguishes Siri from Spotlight by how
-// long Command-Space is held, so the difference between the two is this call
-// and sendChord().
-bool holdChord(const Chord& chord, uint32_t ms);
-
-// Types `text` as keystrokes, US layout, letters and digits only. Used to
-// drive Spotlight, which is the one path to an application that needs no
-// shortcut set up on the Mac first.
-bool typeText(const char* text);
 
 // Taps Return.
 bool sendReturn();
 
 // Types `text` as keystrokes, US layout, every printable ASCII character --
-// which is what a password needs and what typeText() deliberately does not do.
+// which is what a password needs.
 //
 // The layout is the catch, and it cannot be discovered from here: HID carries
 // key POSITIONS, and the Mac decides what character each position produces. On
 // a non-US layout the symbols land wrong. docs/apps/remote.md says so; there
 // is nothing the reader can do about it, because nothing comes back.
 bool typeSecret(const char* text);
+
+// Presses a keyboard key and LEAVES IT DOWN until releaseHeld(). Every other
+// keyboard report sent meanwhile carries it too, so tapping seek or lock does
+// not let it go by accident. False when there is no subscribed host, and then
+// nothing is considered held.
+bool pressHeld(uint8_t usage);
+bool releaseHeld();
+bool keyHeld();
 
 // Taps a modifier with no key on it. Types nothing anywhere, which is the
 // point: it wakes a sleeping display so the login window is up and focused

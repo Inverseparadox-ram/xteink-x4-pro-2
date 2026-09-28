@@ -11,6 +11,7 @@
 //
 //   crossplay-unlock pair      store the reader's code and this Mac's password
 //   crossplay-unlock password  store a new password, keeping the pairing
+//   crossplay-unlock unblock   lift the lockout after ten wrong combinations
 //   crossplay-unlock status    what it thinks it has
 //   crossplay-unlock forget    delete both from the Keychain
 //   crossplay-unlock run       serve challenges (what launchd runs)
@@ -25,6 +26,7 @@ import CoreBluetooth
 import CryptoKit
 import CoreGraphics
 import Security
+import CoreAudio
 
 // MARK: - The wire, exactly as RemoteVault.h defines it
 
@@ -33,6 +35,15 @@ enum Wire {
     static let challenge = CBUUID(string: "6F1B0A01-9D3C-4F5E-8A77-2B4C1D6E9F01")
     static let response = CBUUID(string: "6F1B0A02-9D3C-4F5E-8A77-2B4C1D6E9F01")
     static let nowPlaying = CBUUID(string: "6F1B0A03-9D3C-4F5E-8A77-2B4C1D6E9F01")
+    static let command = CBUUID(string: "6F1B0A04-9D3C-4F5E-8A77-2B4C1D6E9F01")
+    static let macState = CBUUID(string: "6F1B0A05-9D3C-4F5E-8A77-2B4C1D6E9F01")
+
+    // The microphone button. [version, command] from the reader, [version,
+    // flags] back; host-tests/remote pins both.
+    static let macLinkVersion: UInt8 = 1
+    static let commandMute: UInt8 = 0x01
+    static let commandUnmute: UInt8 = 0x02
+    static let flagMicrophonesMuted: UInt8 = 0x01
 
     static let version: UInt8 = 1
     static let nonceLen = 16
@@ -190,9 +201,18 @@ enum Store {
 // The reader's counter only ever goes up, so anything at or below what we have
 // already accepted is a recording being played back at us.
 final class Ledger {
+    // Ten wrong answers in a row, and the helper stops answering altogether
+    // until someone at the Mac runs `crossplay-unlock unblock`. The reader's
+    // combination is eight presses of two keys -- 256 possibilities -- and the
+    // only thing that makes so few safe is that there is nothing on the reader
+    // to test a guess against, so every guess has to come here. Ten tries at
+    // 256 is a four percent chance, once, and then a person has to intervene.
+    static let lockoutAfter = 10
+
     private let path: URL
     private(set) var highWater: UInt64 = 0
     private(set) var strikes: Int = 0
+    private(set) var lockedOut = false
     private var blockedUntil: Date = .distantPast
 
     init() {
@@ -200,9 +220,25 @@ final class Ledger {
             .appendingPathComponent("CrossPlayUnlock", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         path = base.appendingPathComponent("ledger.json")
+        reload()
+    }
+
+    // The file is the truth, not this object. `pair` and `unblock` are
+    // separate processes that rewrite it while the agent runs, and an agent
+    // holding a copy from startup would answer a fresh pairing with
+    // "replayed" and stay locked out after an unblock -- so it re-reads before
+    // every request rather than trusting what it read at launch.
+    func reload() {
+        highWater = 0
+        strikes = 0
+        lockedOut = false
         if let data = try? Data(contentsOf: path),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             highWater = (json["counter"] as? NSNumber)?.uint64Value ?? 0
+            // Persisted, so a restart -- a crash, a reboot, launchd's KeepAlive
+            // -- does not hand a guesser a fresh ten.
+            strikes = (json["strikes"] as? NSNumber)?.intValue ?? 0
+            lockedOut = (json["lockedOut"] as? NSNumber)?.boolValue ?? false
         }
     }
 
@@ -221,33 +257,52 @@ final class Ledger {
     func reset() {
         highWater = 0
         strikes = 0
+        lockedOut = false
+        blockedUntil = .distantPast
+        save()
+    }
+
+    // Lifts a lockout and clears the count, keeping the counter: the pairing
+    // is still the same conversation.
+    func unblock() {
+        strikes = 0
+        lockedOut = false
         blockedUntil = .distantPast
         save()
     }
 
     private func save() {
-        let json: [String: Any] = ["counter": NSNumber(value: highWater)]
+        let json: [String: Any] = ["counter": NSNumber(value: highWater),
+                                   "strikes": NSNumber(value: strikes),
+                                   "lockedOut": NSNumber(value: lockedOut)]
         try? JSONSerialization.data(withJSONObject: json).write(to: path)
     }
 
-    // A wrong MAC is a wrong PIN or a stranger, and the reader cannot tell
-    // which. This is the only place either can be counted, which is what makes
-    // a four-digit PIN worth having: there is no offline oracle, so every guess
-    // has to come through here.
-    var isBlocked: Bool { Date() < blockedUntil }
+    // A wrong MAC is a wrong combination or a stranger, and the reader cannot
+    // tell which. This is the only place either can be counted.
+    var isBlocked: Bool { lockedOut || Date() < blockedUntil }
 
     func strike() {
         strikes += 1
-        if strikes >= 5 {
-            // Doubling, from half a minute. Five wrong answers is already well
-            // past a mistyped PIN.
+        if strikes >= Ledger.lockoutAfter {
+            lockedOut = true
+            log("LOCKED OUT after \(strikes) wrong answers in a row. Run: crossplay-unlock unblock")
+        } else if strikes >= 5 {
+            // Slowing down from the fifth, doubling from half a minute, so the
+            // ten cannot be spent in the few seconds they would otherwise take.
             let seconds = min(pow(2.0, Double(strikes - 5)) * 30.0, 3600.0)
             blockedUntil = Date().addingTimeInterval(seconds)
-            log("blocking for \(Int(seconds))s after \(strikes) bad answers")
+            log("pausing \(Int(seconds))s after \(strikes) wrong answers")
         }
+        save()
     }
 
-    func clearStrikes() { strikes = 0; blockedUntil = .distantPast }
+    func clearStrikes() {
+        guard strikes != 0 else { return }
+        strikes = 0
+        blockedUntil = .distantPast
+        save()
+    }
 }
 
 func log(_ message: String) {
@@ -337,6 +392,173 @@ enum NowPlaying {
     }
 }
 
+// MARK: - The microphones
+
+// Mutes every input device the Mac has: the built-in one if there is one --
+// a Mac mini has none -- plus AirPods, USB and display microphones, and any
+// plugged in while the mute is on.
+//
+// Through CoreAudio, device by device. A device with a mute control is muted
+// with it; one without gets its input volume set to zero, and the level it
+// had is remembered so unmuting puts it back.
+//
+// What it does NOT do: the camera. macOS has no supported way for a program
+// to switch a camera off. The only system-level switch is a device-management
+// profile of the kind an employer's IT installs.
+final class Microphones {
+    // True between a mute from the reader and the next unmute. While it is on,
+    // anything that turns an input back up -- an app's automatic gain, a new
+    // headset -- is turned back down.
+    private(set) var wanted = false
+    private var savedVolumes: [AudioObjectID: [AudioObjectPropertyElement: Float32]] = [:]
+    private var timer: Timer?
+    var onChange: (() -> Void)?
+
+    init() {
+        // A mute from before a restart is still a mute: CoreAudio keeps device
+        // state, so if everything is silent now, keep it that way.
+        let inputs = Microphones.inputDevices()
+        wanted = !inputs.isEmpty && inputs.allSatisfy { isMuted($0) }
+        var devices = Microphones.address(kAudioHardwarePropertyDevices)
+        _ = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devices, DispatchQueue.main) {
+            [weak self] _, _ in
+            self?.enforce()
+            self?.onChange?()
+        }
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.enforce()
+        }
+    }
+
+    static func address(_ selector: AudioObjectPropertySelector,
+                        _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+                        _ element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain)
+        -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+    }
+
+    static func inputDevices() -> [AudioObjectID] {
+        var addr = address(kAudioHardwarePropertyDevices)
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr, size > 0 else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids.filter { id in
+            var streams = address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput)
+            var streamSize: UInt32 = 0
+            return AudioObjectGetPropertyDataSize(id, &streams, 0, nil, &streamSize) == noErr && streamSize > 0
+        }
+    }
+
+    static func name(_ id: AudioObjectID) -> String {
+        var addr = address(kAudioObjectPropertyName)
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &name) == noErr, let value = name else {
+            return "input \(id)"
+        }
+        return value.takeRetainedValue() as String
+    }
+
+    private static func settable(_ id: AudioObjectID, _ addr: inout AudioObjectPropertyAddress) -> Bool {
+        guard AudioObjectHasProperty(id, &addr) else { return false }
+        var ok: DarwinBoolean = false
+        return AudioObjectIsPropertySettable(id, &addr, &ok) == noErr && ok.boolValue
+    }
+
+    // The main volume control if the device has one, else its per-channel ones.
+    private func volumeElements(_ id: AudioObjectID) -> [AudioObjectPropertyElement] {
+        var found: [AudioObjectPropertyElement] = []
+        for element: AudioObjectPropertyElement in [kAudioObjectPropertyElementMain, 1, 2] {
+            var addr = Microphones.address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeInput, element)
+            if Microphones.settable(id, &addr) { found.append(element) }
+        }
+        return found.contains(kAudioObjectPropertyElementMain) ? [kAudioObjectPropertyElementMain] : found
+    }
+
+    private func volume(_ id: AudioObjectID, _ element: AudioObjectPropertyElement) -> Float32? {
+        var addr = Microphones.address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeInput, element)
+        var value: Float32 = 0
+        var size = UInt32(MemoryLayout<Float32>.size)
+        return AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr ? value : nil
+    }
+
+    private func setVolume(_ id: AudioObjectID, _ element: AudioObjectPropertyElement, _ level: Float32) {
+        var addr = Microphones.address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeInput, element)
+        var value = level
+        _ = AudioObjectSetPropertyData(id, &addr, 0, nil, UInt32(MemoryLayout<Float32>.size), &value)
+    }
+
+    func isMuted(_ id: AudioObjectID) -> Bool {
+        var mute = Microphones.address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeInput)
+        if AudioObjectHasProperty(id, &mute) {
+            var value: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            if AudioObjectGetPropertyData(id, &mute, 0, nil, &size, &value) == noErr, value != 0 { return true }
+        }
+        let elements = volumeElements(id)
+        return !elements.isEmpty && elements.allSatisfy { (volume(id, $0) ?? 1) <= 0.0001 }
+    }
+
+    // False when the device offers neither a mute nor a volume it lets anyone
+    // set, which is the one case this cannot silence. It is logged by name.
+    @discardableResult
+    private func setMuted(_ id: AudioObjectID, _ muted: Bool) -> Bool {
+        var mute = Microphones.address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeInput)
+        if Microphones.settable(id, &mute) {
+            var value: UInt32 = muted ? 1 : 0
+            if AudioObjectSetPropertyData(id, &mute, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value) == noErr {
+                return true
+            }
+        }
+        let elements = volumeElements(id)
+        guard !elements.isEmpty else { return false }
+        for element in elements {
+            if muted {
+                if let level = volume(id, element), level > 0.0001 { savedVolumes[id, default: [:]][element] = level }
+                setVolume(id, element, 0)
+            } else {
+                setVolume(id, element, savedVolumes[id]?[element] ?? 0.75)
+            }
+        }
+        if !muted { savedVolumes[id] = nil }
+        return true
+    }
+
+    var allMuted: Bool {
+        let inputs = Microphones.inputDevices()
+        return inputs.allSatisfy { isMuted($0) }
+    }
+
+    func mute() {
+        wanted = true
+        for id in Microphones.inputDevices() where !setMuted(id, true) {
+            log("microphones: cannot mute \(Microphones.name(id)); it offers no mute and no volume")
+        }
+        log("microphones: muted \(Microphones.inputDevices().filter { isMuted($0) }.count) of \(Microphones.inputDevices().count)")
+    }
+
+    func unmute() {
+        wanted = false
+        for id in Microphones.inputDevices() { setMuted(id, false) }
+        log("microphones: unmuted")
+    }
+
+    // Puts back anything that came back on while the mute was wanted.
+    func enforce() {
+        guard wanted else { return }
+        var changed = false
+        for id in Microphones.inputDevices() where !isMuted(id) {
+            if setMuted(id, true) {
+                changed = true
+                log("microphones: \(Microphones.name(id)) came back on; muted it again")
+            }
+        }
+        if changed { onChange?() }
+    }
+}
+
 // MARK: - The agent
 
 final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -344,6 +566,9 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private var reader: CBPeripheral?
     private var responseCharacteristic: CBCharacteristic?
     private var nowPlayingCharacteristic: CBCharacteristic?
+    private var macStateCharacteristic: CBCharacteristic?
+    private let microphones = Microphones()
+    private var lastMacState: Data?
     private let ledger = Ledger()
     private let secret: Data
 
@@ -358,6 +583,7 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         self.secret = secret
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
+        microphones.onChange = { [weak self] in self?.sendMacState() }
         let centre = DistributedNotificationCenter.default()
         for source in NowPlaying.sources {
             observers.append(centre.addObserver(forName: NSNotification.Name(source.notification), object: nil,
@@ -387,11 +613,40 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
 
+    private func sendMacState() {
+        let flags: UInt8 = microphones.allMuted ? Wire.flagMicrophonesMuted : 0
+        let frame = Data([Wire.macLinkVersion, flags])
+        guard frame != lastMacState else { return }
+        guard let characteristic = macStateCharacteristic, let peripheral = reader else { return }
+        peripheral.writeValue(frame, for: characteristic, type: .withResponse)
+        lastMacState = frame
+    }
+
+    private func handleCommand(_ frame: Data) {
+        let bytes = [UInt8](frame)
+        guard bytes.count == 2, bytes[0] == Wire.macLinkVersion else {
+            log("a command arrived that is not one")
+            return
+        }
+        switch bytes[1] {
+        case Wire.commandMute: microphones.mute()
+        case Wire.commandUnmute: microphones.unmute()
+        default:
+            log("an unknown command \(bytes[1]) was ignored")
+            return
+        }
+        // Reported from what the devices now say, not from what was asked:
+        // the reader's button fills only if the mute really took.
+        lastMacState = nil
+        sendMacState()
+    }
+
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let error = error else { return }
         log("write to \(characteristic.uuid) failed: \(error.localizedDescription)")
         // Try again next time rather than believing the reader has it.
         if characteristic.uuid == Wire.nowPlaying { lastSent = nil }
+        if characteristic.uuid == Wire.macState { lastMacState = nil }
     }
 
     func centralManagerDidUpdateState(_ manager: CBCentralManager) {
@@ -436,6 +691,8 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         responseCharacteristic = nil
         nowPlayingCharacteristic = nil
         lastSent = nil
+        macStateCharacteristic = nil
+        lastMacState = nil
         // The reader takes its radio down when the app closes, so a
         // disconnection is normal rather than a failure. Reconnect stays
         // pending until it advertises again.
@@ -447,7 +704,8 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             log("the reader has no unlock service")
             return
         }
-        peripheral.discoverCharacteristics([Wire.challenge, Wire.response, Wire.nowPlaying], for: service)
+        peripheral.discoverCharacteristics([Wire.challenge, Wire.response, Wire.nowPlaying, Wire.command,
+                                            Wire.macState], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
@@ -458,6 +716,12 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 log("listening for challenges")
             }
             if characteristic.uuid == Wire.response { responseCharacteristic = characteristic }
+            if characteristic.uuid == Wire.command { peripheral.setNotifyValue(true, for: characteristic) }
+            if characteristic.uuid == Wire.macState {
+                macStateCharacteristic = characteristic
+                lastMacState = nil
+                sendMacState()
+            }
             if characteristic.uuid == Wire.nowPlaying {
                 nowPlayingCharacteristic = characteristic
                 // The reader has just (re)connected and knows nothing; tell it.
@@ -469,7 +733,12 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic,
                     error: Error?) {
-        guard characteristic.uuid == Wire.challenge, let frame = characteristic.value else { return }
+        guard let frame = characteristic.value else { return }
+        if characteristic.uuid == Wire.command {
+            handleCommand(frame)
+            return
+        }
+        guard characteristic.uuid == Wire.challenge else { return }
         handle(frame)
     }
 
@@ -482,8 +751,9 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             log("challenge speaks version \(challenge.version); we speak \(Wire.version)")
             return
         }
+        ledger.reload()
         if ledger.isBlocked {
-            log("blocked; ignoring")
+            log(ledger.lockedOut ? "locked out; ignoring. Run: crossplay-unlock unblock" : "pausing; ignoring")
             return
         }
 
@@ -599,7 +869,17 @@ func commandStatus() {
     print("secret:   \(Store.get("secret") != nil ? "stored" : "missing")")
     print("password: \(Store.get("password") != nil ? "stored" : "missing")")
     print("screen:   \(screenIsLocked() ? "locked" : "awake")")
-    print("counter:  \(Ledger().highWater)")
+    let ledger = Ledger()
+    print("counter:  \(ledger.highWater)")
+    print("wrong:    \(ledger.strikes) in a row\(ledger.lockedOut ? " -- LOCKED OUT, run: crossplay-unlock unblock" : "")")
+    let inputs = Microphones.inputDevices()
+    let mics = Microphones()
+    print("mics:     \(inputs.filter { mics.isMuted($0) }.count) of \(inputs.count) muted")
+}
+
+func commandUnblock() {
+    Ledger().unblock()
+    print("Unblocked. The reader can try its combination again; the pairing is unchanged.")
 }
 
 func commandForget() {
@@ -630,10 +910,11 @@ func commandRun() {
 switch CommandLine.arguments.dropFirst().first ?? "run" {
 case "pair": commandPair()
 case "password": commandPassword()
+case "unblock": commandUnblock()
 case "status": commandStatus()
 case "forget": commandForget()
 case "run": commandRun()
 default:
-    print("usage: crossplay-unlock [pair|password|status|forget|run]")
+    print("usage: crossplay-unlock [pair|password|unblock|status|forget|run]")
     exit(2)
 }

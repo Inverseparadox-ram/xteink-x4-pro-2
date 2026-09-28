@@ -8899,12 +8899,20 @@ void buildTheRemote(Rendered& out, const remoteui::RemoteModel& model) {
   remoteui::buildRemote(screen, model);
 }
 
-void buildThePin(Rendered& out, const remoteui::PinModel& model) {
+void buildTheUnlocking(Rendered& out) {
   const fui::DeviceContext ctx = device();
   const fui::InputSnapshot noInput{};
   toybox::Frame frame(out.target, ctx, noInput, out.interactions);
   toybox::Screen screen(frame, toybox::themeTokens());
-  remoteui::buildPin(screen, model);
+  remoteui::buildUnlocking(screen);
+}
+
+void buildTheComboSet(Rendered& out, const remoteui::ComboSetModel& model) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  remoteui::buildComboSet(screen, model);
 }
 
 void buildThePair(Rendered& out, const remoteui::PairModel& model) {
@@ -9663,8 +9671,8 @@ void testEveryRemoteControlIsLive() {
   CHECK(out.has(remoteui::ActionPlayPause));
   CHECK(out.has(remoteui::ActionNext));
   CHECK(out.has(remoteui::ActionPrevious));
-  CHECK(out.has(remoteui::ActionSiri));
-  CHECK(out.has(remoteui::ActionClaude));
+  CHECK(out.has(remoteui::ActionHoldKey));
+  CHECK(out.has(remoteui::ActionMicrophone));
   CHECK(out.has(remoteui::ActionUnlock));
   CHECK(out.has(remoteui::ActionForward));
   CHECK(out.has(remoteui::ActionBack));
@@ -9705,8 +9713,8 @@ void testEveryRemoteControlWinsItsOwnCentre() {
   buildTheRemote(out, model);
 
   for (const fui::ActionId action :
-       {remoteui::ActionPlayPause, remoteui::ActionNext, remoteui::ActionPrevious, remoteui::ActionSiri,
-        remoteui::ActionClaude, remoteui::ActionUnlock, remoteui::ActionForward, remoteui::ActionBack,
+       {remoteui::ActionPlayPause, remoteui::ActionNext, remoteui::ActionPrevious, remoteui::ActionHoldKey,
+        remoteui::ActionMicrophone, remoteui::ActionUnlock, remoteui::ActionForward, remoteui::ActionBack,
         remoteui::ActionVolumeUp, remoteui::ActionVolumeDown, remoteui::ActionMute, remoteui::ActionProfile}) {
     fui::Rect rect{};
     bool found = false;
@@ -9897,47 +9905,65 @@ void testALongTitleIsCutNotWrapped() {
   CHECK(rectOf(shortTitle, remoteui::ActionPlayPause).y == rectOf(noArtist, remoteui::ActionPlayPause).y);
 }
 
-// The PIN pad: twelve keys, and the two that are not digits are the two that
-// can be dead. A disabled button registers no hit rect at all, so this is the
-// check that they come BACK when they should.
-void testThePinPadEnablesOnlyWhatCanBePressed() {
-  Rendered empty;
-  remoteui::PinModel model;
+// The unlocking screen says one word. No count, no dots, no hints, nothing to
+// tap -- the combination comes from the side keys, and a watcher learns only
+// that an unlock is under way. Every one of those is checked, because each is
+// a thing a later edit could add back "to help".
+void testTheUnlockingScreenSaysOneWord() {
+  Rendered out;
+  buildTheUnlocking(out);
+  CHECK(drewText(out, "UNLOCKING"));
+  CHECK(out.interactions.count() == 0);
+  for (const char* hint : {"LEFT", "RIGHT", "PIN", "PRESS", "COMBINATION", "1", "2", "8"}) {
+    CHECK(!drewText(out, hint));
+  }
+}
+
+// Choosing the combination is the one time the screen DOES count presses: a
+// combination chosen blind, with a slip in it, is one its owner can never
+// unlock with. It still never draws which side was pressed.
+void testTheCombinationSetupCountsButNeverShowsTheOrder() {
+  Rendered first;
+  remoteui::ComboSetModel model;
+  model.detail = "Press the side keys eight times.";
+  model.entered = 3;
+  buildTheComboSet(first, model);
+  CHECK(drewText(first, "COMBINATION"));
+  CHECK(!drewText(first, "AGAIN"));
+  for (const char* order : {"LEFT", "RIGHT", "L", "R"}) {
+    CHECK(!drewText(first, order));
+  }
+
+  Rendered again;
+  model.confirming = true;
   model.entered = 0;
-  model.canConfirm = false;
-  buildThePin(empty, model);
-  CHECK(empty.has(remoteui::ActionPinDigit));
-  // Nothing to delete and nothing to confirm.
-  CHECK(!empty.has(remoteui::ActionPinBack));
-  CHECK(!empty.has(remoteui::ActionPinOk));
+  model.detail = "Once more: the same eight.";
+  buildTheComboSet(again, model);
+  CHECK(drewText(again, "AGAIN"));
+}
 
-  Rendered ready;
-  model.entered = 4;
-  model.canConfirm = true;
-  buildThePin(ready, model);
-  CHECK(ready.has(remoteui::ActionPinDigit));
-  CHECK(ready.has(remoteui::ActionPinBack));
-  CHECK(ready.has(remoteui::ActionPinOk));
-  CHECK(!ready.interactions.overflowed());
-
-  // The digits are never drawn back at the person typing them. This one is
-  // typed at a lock screen in public more often than anywhere else.
-  for (const char* typed : {"1590", "159", "15"}) {
-    CHECK(!drewText(ready, typed));
+// F8 is the one button whose face is a word: the button IS that key, and no
+// picture says F8. The microphone is live whether or not the Mac has said
+// anything yet -- a button waiting on a report nobody sent would be dead.
+void testTheHoldAndMicrophoneButtonsAreAlwaysLive() {
+  for (int state = 0; state < 4; ++state) {
+    Rendered out;
+    remoteui::RemoteModel model;
+    model.connected = true;
+    model.profileName = "YOUTUBE";
+    model.keyHeld = (state & 1) != 0;
+    model.micKnown = (state & 2) != 0;
+    model.micMuted = model.micKnown;
+    buildTheRemote(out, model);
+    CHECK(drewText(out, "F8"));
+    for (const fui::ActionId action : {remoteui::ActionHoldKey, remoteui::ActionMicrophone}) {
+      fui::Rect rect{};
+      for (size_t i = 0; i < out.interactions.count(); ++i) {
+        if (out.interactions.data()[i].action == action) rect = out.interactions.data()[i].rect;
+      }
+      CHECK(out.tap(rect.x + rect.width / 2, rect.y + rect.height / 2).action == action);
+    }
   }
-
-  // Every digit key carries its own value, and zero is a digit like any other
-  // -- an off-by-one here gives a pad where 0 types nothing.
-  bool sawZero = false;
-  bool sawNine = false;
-  for (size_t i = 0; i < ready.interactions.count(); ++i) {
-    const auto& entry = ready.interactions.data()[i];
-    if (entry.action != remoteui::ActionPinDigit) continue;
-    if (entry.value == 0) sawZero = true;
-    if (entry.value == 9) sawNine = true;
-  }
-  CHECK(sawZero);
-  CHECK(sawNine);
 }
 
 // The pairing code is read off this screen and typed into another machine
@@ -14309,7 +14335,9 @@ int main() {
   testNowPlayingYieldsToAnythingActionable();
   testALongTitleIsCutNotWrapped();
   testTheStatusRowCanCarryTheUnlockMessage();
-  testThePinPadEnablesOnlyWhatCanBePressed();
+  testTheUnlockingScreenSaysOneWord();
+  testTheCombinationSetupCountsButNeverShowsTheOrder();
+  testTheHoldAndMicrophoneButtonsAreAlwaysLive();
   testThePairingCodeIsGrouped();
   testEveryForecastViewOffersAllThreeSegments();
   testAnUnreportedFieldIsNotDrawnAsZero();

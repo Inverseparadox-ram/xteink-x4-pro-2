@@ -24,6 +24,8 @@ constexpr const char* kServiceUuid = "6f1b0a00-9d3c-4f5e-8a77-2b4c1d6e9f01";
 constexpr const char* kChallengeUuid = "6f1b0a01-9d3c-4f5e-8a77-2b4c1d6e9f01";
 constexpr const char* kResponseUuid = "6f1b0a02-9d3c-4f5e-8a77-2b4c1d6e9f01";
 constexpr const char* kNowPlayingUuid = "6f1b0a03-9d3c-4f5e-8a77-2b4c1d6e9f01";
+constexpr const char* kCommandUuid = "6f1b0a04-9d3c-4f5e-8a77-2b4c1d6e9f01";
+constexpr const char* kMacStateUuid = "6f1b0a05-9d3c-4f5e-8a77-2b4c1d6e9f01";
 
 #if defined(CROSSPLAY_BLE_HID)
 
@@ -31,6 +33,9 @@ NimBLEService* service = nullptr;
 NimBLECharacteristic* challengeOut = nullptr;
 NimBLECharacteristic* responseIn = nullptr;
 NimBLECharacteristic* nowPlayingIn = nullptr;
+NimBLECharacteristic* commandOut = nullptr;
+NimBLECharacteristic* macStateIn = nullptr;
+volatile bool commandSubscribed = false;
 
 // Written by the NimBLE host task, read by the activity task. One producer,
 // one consumer, and `answerReady` is set last and cleared first -- so the
@@ -69,11 +74,51 @@ void queueNothingPlaying() {
   queueNowPlaying(nothing, sizeof(nothing));
 }
 
+// The Mac's state, under the same lock. `macStateGone` asks the activity to
+// forget what it knew, which a decoded frame cannot express: "not known" is
+// the absence of a frame, not a value one carries.
+uint8_t macStateFrame[kMacStateLen];
+bool macStatePending = false;
+bool macStateGone = false;
+MacState macStateShown;
+
+void queueMacState(const uint8_t* data, const size_t len) {
+  if (len != sizeof(macStateFrame)) return;
+  taskENTER_CRITICAL(&nowLock);
+  std::memcpy(macStateFrame, data, len);
+  macStatePending = true;
+  macStateGone = false;
+  taskEXIT_CRITICAL(&nowLock);
+}
+
+void forgetMacState() {
+  taskENTER_CRITICAL(&nowLock);
+  macStatePending = false;
+  macStateGone = true;
+  taskEXIT_CRITICAL(&nowLock);
+}
+
 class ChallengeCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, const uint16_t value) override {
     subscribed = value != 0;
     LOG_INF(kTag, "unlock helper %s", subscribed ? "subscribed" : "gone");
-    if (!subscribed) queueNothingPlaying();
+    if (!subscribed) {
+      queueNothingPlaying();
+      forgetMacState();
+    }
+  }
+};
+
+class CommandCallbacks : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, const uint16_t value) override {
+    commandSubscribed = value != 0;
+  }
+};
+
+class MacStateCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override {
+    const NimBLEAttValue& value = characteristic->getValue();
+    queueMacState(value.data(), value.size());
   }
 };
 
@@ -100,6 +145,8 @@ class NowPlayingCallbacks : public NimBLECharacteristicCallbacks {
 ChallengeCallbacks challengeCallbacks;
 ResponseCallbacks responseCallbacks;
 NowPlayingCallbacks nowPlayingCallbacks;
+CommandCallbacks commandCallbacks;
+MacStateCallbacks macStateCallbacks;
 
 #endif  // CROSSPLAY_BLE_HID
 
@@ -131,10 +178,17 @@ void begin() {
   // CoreBluetooth answers the encryption requirement on its own by encrypting
   // the link it already has.
   nowPlayingIn = service->createCharacteristic(kNowPlayingUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
-  if (challengeOut == nullptr || responseIn == nullptr || nowPlayingIn == nullptr) {
+  commandOut = service->createCharacteristic(kCommandUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  // Encrypted for the same reason as now playing: it is the Mac's word about
+  // its own microphones, and only the bonded Mac should be able to say it.
+  macStateIn = service->createCharacteristic(kMacStateUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
+  if (challengeOut == nullptr || responseIn == nullptr || nowPlayingIn == nullptr || commandOut == nullptr ||
+      macStateIn == nullptr) {
     LOG_ERR(kTag, "unlock: could not create the characteristics");
     return;
   }
+  commandOut->setCallbacks(&commandCallbacks);
+  macStateIn->setCallbacks(&macStateCallbacks);
   challengeOut->setCallbacks(&challengeCallbacks);
   responseIn->setCallbacks(&responseCallbacks);
   nowPlayingIn->setCallbacks(&nowPlayingCallbacks);
@@ -151,7 +205,11 @@ void end() {
   challengeOut = nullptr;
   responseIn = nullptr;
   nowPlayingIn = nullptr;
+  commandOut = nullptr;
+  macStateIn = nullptr;
+  commandSubscribed = false;
   queueNothingPlaying();
+  forgetMacState();
   subscribed = false;
   answerReady = false;
   answerLen = 0;
@@ -230,6 +288,37 @@ bool takeNowPlaying(NowPlaying& out) {
   return true;
 }
 
+bool sendCommand(const MacCommand command) {
+  if (commandOut == nullptr || !commandSubscribed) return false;
+  uint8_t frame[kCommandLen];
+  encodeCommand(command, frame);
+  commandOut->setValue(frame, sizeof(frame));
+  commandOut->notify();
+  return true;
+}
+
+bool takeMacState(MacState& out) {
+  uint8_t frame[kMacStateLen];
+  taskENTER_CRITICAL(&nowLock);
+  const bool pending = macStatePending;
+  const bool gone = macStateGone;
+  if (pending) std::memcpy(frame, macStateFrame, sizeof(frame));
+  macStatePending = false;
+  macStateGone = false;
+  taskEXIT_CRITICAL(&nowLock);
+
+  MacState next = macStateShown;
+  if (gone) {
+    next = MacState{};
+  } else if (!pending || !decodeMacState(frame, sizeof(frame), next)) {
+    return false;
+  }
+  if (next.known == macStateShown.known && next.microphonesMuted == macStateShown.microphonesMuted) return false;
+  macStateShown = next;
+  out = macStateShown;
+  return true;
+}
+
 void randomBytes(uint8_t* out, const size_t len) {
   for (size_t at = 0; at < len; at += 4) {
     const uint32_t word = esp_random();
@@ -243,11 +332,19 @@ void randomBytes(uint8_t* out, const size_t len) {
 void begin() {}
 void end() {}
 const char* serviceUuid() { return kServiceUuid; }
-bool helperPresent() { return false; }
+// CROSSPOINT_SIM_HELPER=1 lets the padlock reach the combination screens in a
+// simulator that has no radio and so no helper to check them against.
+bool helperPresent() {
+  const char* env = std::getenv("CROSSPOINT_SIM_HELPER");
+  return env != nullptr && env[0] == '1';
+}
 bool ask(const vault::Challenge&) { return false; }
 State poll() { return State::Idle; }
 bool take(vault::Response&) { return false; }
 void cancel() {}
+
+bool sendCommand(MacCommand) { return false; }
+bool takeMacState(MacState&) { return false; }
 
 // CROSSPOINT_SIM_NOWPLAYING="Title|Artist" hands the panel one song, so the
 // now-playing row can be rendered and photographed in a simulator that has no

@@ -73,31 +73,54 @@ long as the host feels like would be lying.
 | `PLAYER KEYS` | `→` | `←` | the arrows alone -- the player sets the jump |
 | `SCRUB` | hold Fast Forward | hold Rewind | the arrows alone -- the host sets the distance |
 
-## The three shortcut buttons
+## The third row: F8, the microphones, the padlock
 
-The third row is a microphone, Claude's mark and a padlock. None of the three
-is a media key -- HID has no usage for Siri and none for launching an
-application -- so the first two type a keyboard shortcut, the same way the seek
-buttons do. The third needed something HID cannot do at all; see below.
+Three different kinds of button, which is why they sit together: none of them
+is a media key.
 
-| Button | Sends | Needs setting up? |
+| Button | Does | Needs the helper? |
 | --- | --- | --- |
-| Siri | `⌘Space` **held** for 1.2s | No, if Siri's shortcut is "Hold ⌘ Space" (System Settings → Apple Intelligence & Siri) |
-| Claude | `⌘Space` tapped, then types `claude`, then Return | No -- that is Spotlight, and it is stock |
-| Unlock / Lock | A challenge, then the password; or `⌃⌘Q` | **Yes**, once. See below |
+| **F8** | One tap presses F8 and leaves it down; the next lets it go | No -- it is a plain key |
+| **Microphone** | Mutes every microphone the Mac has; tap again to unmute | Yes |
+| **Padlock** | Unlocks with the side-key combination, or locks with `⌃⌘Q` | Yes, to unlock |
 
-**Siri and Claude ride the same chord.** macOS itself separates Siri from
-Spotlight by whether ⌘Space is *held* or *tapped*, so this remote does too --
-which is why neither button needs anything configured that a Mac does not
-already have. `host-tests/remote` asserts the two stay on one chord.
+### F8, held
 
-This row replaced explicit PLAY, PAUSE and STOP buttons. Those were the
-transport toggle spelled out three times; the toggle above is what macOS
-honours most reliably anyway, so they cost a third of the panel and added one
-control it did not already give. The padlock replaced a Do Not Disturb button
-that sent `⌃⌥⌘D`, a chord with no default binding anywhere in macOS -- so it
-did nothing at all until the user made a Shortcut for it, and the remote had no
-way to tell whether they had.
+A HID keyboard report is the whole state of the keyboard, not an event, so a
+report that leaves a held key out tells the Mac it was let go. Every keyboard
+report the remote sends -- seek, the lock chord, the unlock typing -- therefore
+carries F8 while it is held, and the key stays down across them. The band is
+filled while it is held: that is the one state here the remote owns outright,
+because the remote is the thing holding the key. Leaving the app lets it go
+before the radio comes down.
+
+**If holding F8 plays or pauses music instead,** macOS is treating it as the
+media key printed on an Apple keyboard's F8. The remote identifies as an Apple
+keyboard (that is what makes the media keys work), so this depends on System
+Settings > Keyboard > "Use F1, F2, etc. keys as standard function keys".
+
+### The microphones
+
+The helper mutes every input device the Mac has, through CoreAudio, device by
+device: the mute control where a device has one, otherwise its input volume
+set to zero with the old level remembered for the unmute. A Mac mini has no
+built-in microphone, so in practice that is AirPods, USB and display
+microphones -- including any plugged in while the mute is on, and any an app
+turns back up, which the helper checks every five seconds and turns back down.
+
+The band fills only when the **Mac reports** that every input is muted, never
+because the button was tapped: a mute that failed to apply must not look like
+one that worked. Until the Mac has said anything the button is outlined, and a
+tap then asks for a mute, the safe direction.
+
+The command is protected by the Bluetooth bond and nothing more, deliberately:
+it has to work without the unlock combination. The worst anything misusing it
+could do is change whether the microphones are muted.
+
+**It does not touch the camera.** macOS has no supported way for a program to
+switch a camera off; the only system-level switch is a device-management
+profile of the kind an employer's IT department installs. The camera is not
+silently left out: this is the limit, stated.
 
 ## The unlock button
 
@@ -119,13 +142,14 @@ four things, and each is a failure it removes:
    real lock state inside the MAC, and sends no password unless the screen is
    locked. Without this the failure is ugly and silent: press unlock at an
    awake Mac and the password goes into whatever field has focus.
-4. **A stolen reader is not a key.** The secret is sealed under a PIN, and no
-   verifier is stored beside it -- every PIN opens the blob into a well-formed
-   secret, so there is nothing to test a guess against offline. The only oracle
-   is the Mac, which counts wrong answers and backs off.
+4. **A stolen reader is not a key.** The secret is sealed under the side-key
+   combination, and no verifier is stored beside it -- every combination opens
+   the blob into a well-formed secret, so there is nothing to test a guess
+   against offline. The only oracle is the Mac, which slows down after five
+   wrong answers in a row and stops answering entirely after ten.
 
-What it does **not** buy, stated plainly: anyone with the reader *and* the PIN
-can unlock the Mac. That is the design -- a key and a code -- not a gap in it.
+What it does **not** buy, stated plainly: anyone with the reader *and* the
+combination can unlock the Mac. That is the design -- a key and a code -- not a gap in it.
 And it does nothing at the FileVault pre-boot screen, because Bluetooth is not
 up that early.
 
@@ -178,17 +202,54 @@ the ESP-IDF: a MAC nobody can run on a host is a MAC nobody can prove.
 launchd plist, with the install steps in its own README. It keeps running
 behind the lock screen, which is the whole reason it is an agent.
 
+### The combination
+
+Eight presses of the two side keys, left or right, in order. It replaced a
+touch PIN pad whose taps the panel did not register reliably; a side key always
+registers.
+
+**Unlocking.** Press the padlock and the screen says UNLOCKING and nothing
+else: no count, no dots, no hint of how far along the entry is or whether a
+press was right. Enter the eight presses. If they are right, the Mac answers
+and unlocks. If they are wrong, nothing visible happens -- the screen still
+says UNLOCKING and the next eight presses are a fresh try. Swipe back from the
+left edge to give up, or leave it: after 30 seconds with no press it returns to
+the panel. Every unlock asks for the combination, even straight after another.
+
+**Why a wrong entry looks like nothing.** The helper does not answer a request
+signed with the wrong secret, because an answer would tell a guesser which
+guess was right. So the reader waits four seconds, hears nothing, drops the
+secret it opened and starts again. An earlier version kept that wrong secret
+and reported "the Mac did not answer" to every later press until the app was
+reopened, which is exactly what a mistyped PIN on an unreliable pad produced.
+
+**Why eight is enough.** 2^8 is 256 combinations, far fewer than a four-digit
+PIN's 10,000. What makes it tolerable is that guessing can only happen at the
+Mac, and the helper stops answering after ten wrong ones in a row until
+someone runs `crossplay-unlock unblock` there -- a four percent chance, once.
+The count survives the helper restarting. `kComboLength` in `RemoteCore.h` is
+the knob if you want more; 12 presses is 4,096.
+
+The wrong-answer count is shared with everything else: after five in a row the
+helper pauses before answering again, doubling from 30 seconds. If an unlock
+that should work does nothing, `crossplay-unlock status` on the Mac says
+whether it is paused or locked out.
+
 ### Setting it up
 
 1. On the reader, open **Remote** and press the padlock. With nothing paired it
    shows a 32-character code in eight groups of four, **once**.
 2. On the Mac, `crossplay-unlock pair`, and type that code and the login
    password.
-3. Back on the reader, press TYPED IT and choose a PIN of 4 to 12 digits. There
-   is no recovery: forget it and you re-pair.
+3. Back on the reader, press either side key, then enter the eight presses you
+   want. Enter them again to confirm; if the two do not match, it starts over.
 
-The PIN is asked once per time the app is opened, and the opened secret lives
-in RAM only -- `onExit` wipes it along with the radio.
+The setup screen counts presses as dots but never shows which side was
+pressed. There is no recovery: forget the combination and you re-pair.
+
+**A reader paired before the combination existed has to pair again,** once.
+Its secret was sealed under a touch PIN that can no longer be entered, so the
+reader refuses the old pairing file and the padlock starts at step 1.
 
 ### Keyboard layout
 
@@ -255,9 +316,12 @@ panel, and each one is there because no drawing does its job:
   nothing to report, it collapses to a single bluetooth glyph -- the live
   controls under it are the rest of the message.
 
-Two screens behind the panel are words by necessity: the **PIN pad**, which
-draws how many digits have been typed and never which, and the **pairing
-code**, which is a code from another machine and cannot be a picture.
+Screens behind the panel use words where no picture can: **UNLOCKING**, which
+is the only thing the combination screen ever says; the **setup** screen, which
+counts presses and never shows their order; and the **pairing code**, which is
+a code from another machine.
+
+The F8 button's face is a word too, because the button *is* that key.
 
 `host-tests/ui` asserts the absence directly: it renders the panel and fails if
 `PLAY/PAUSE`, `VOLUME`, `MUTE`, `FWD`, `PREV`, `NEXT`, `SIRI`, `CLAUDE`, `DND`,

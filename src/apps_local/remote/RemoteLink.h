@@ -11,11 +11,13 @@
 // holds the paired secret, and that its screen is actually locked. Neither
 // fact can travel over a HID input report, so this service carries them.
 //
-// Three characteristics and nothing else:
+// Five characteristics and nothing else:
 //
 //   CHALLENGE   notify   the reader's 58-byte request
 //   RESPONSE    write    the Mac's answer, up to 139 bytes
 //   NOWPLAYING  write    what Music or Spotify is playing; see RemoteCore.h
+//   COMMAND     notify   the microphone button's request, 2 bytes
+//   MACSTATE    write    whether the Mac's microphones are muted, 2 bytes
 //
 // Both directions are authenticated by RemoteVault, so the service itself can
 // stay as dumb as it looks: it moves bytes and reports whether any arrived.
@@ -91,6 +93,15 @@ void cancel();
 // timer. Cleared -- and reported as a change -- when the helper goes away, so
 // the panel never shows a song from a Mac it can no longer hear.
 bool takeNowPlaying(NowPlaying& out);
+
+// Asks the Mac to act. False when the helper has not subscribed to COMMAND,
+// which the button then reports rather than pretending it was obeyed.
+bool sendCommand(MacCommand command);
+
+// What the Mac last reported about itself. True only on a CHANGE, for the same
+// reason as takeNowPlaying(); reset to "not known" when the helper goes away,
+// so the microphone button never claims a state it can no longer be told.
+bool takeMacState(MacState& out);
 
 // The hardware entropy source, wrapped here so the activity need not include
 // an ESP header to build a nonce. A nonce drawn from millis() would repeat

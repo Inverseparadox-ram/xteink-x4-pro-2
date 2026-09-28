@@ -8,7 +8,7 @@
 
 #include "../ui/ToyboxIcons.h"
 #include "../ui/ToyboxText.h"
-#include "RemoteVault.h"
+#include "RemoteCore.h"
 
 namespace remoteui {
 namespace {
@@ -200,20 +200,25 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
                   icon_rc_fwd_40, model.forwardSeconds, ActionForward);
   y = static_cast<int16_t>(y + rowH + gutter);
 
-  // --- The three Mac shortcuts --------------------------------------------
-  // A microphone for Siri, Claude's mark, and a padlock. None of the three is
-  // a media key: the first two type a keyboard shortcut, which is the only
-  // thing a HID peripheral can do about an application, and the third is the
-  // one control on this panel that will not act until the Mac has answered it.
+  // --- F8, the microphones, the padlock -----------------------------------
+  // F8 is a plain key held across two taps. The other two need the Mac to
+  // act and answer, so they ride the unlock helper's GATT service.
   //
-  // This row replaced explicit PLAY, PAUSE and STOP. Those were the transport
-  // toggle spelled out three times, and the toggle above is what macOS honours
-  // most reliably anyway -- so they cost a third of the panel and added one
-  // control the toggle did not already give.
+  // Each band is filled only for a state the remote actually knows: F8 while
+  // IT is holding the key, the microphone while the MAC has said every input
+  // is muted. The microphone stays outlined until the Mac has said anything,
+  // rather than guessing.
   const int16_t trio = static_cast<int16_t>((width - 2 * gutter) / 3);
-  iconButton(screen, fui::makeRect(toybox::kMargin, y, trio, rowH), icon_rc_siri_40, 40, ActionSiri, false);
+  {
+    // A label, not a mark: the button IS that key, and no picture says F8.
+    fui::ButtonProps hold;
+    hold.label = "F8";
+    hold.action = ActionHoldKey;
+    if (!model.keyHeld) hold.styles = toybox::rowStyles();
+    screen.button(hold, fui::makeRect(toybox::kMargin, y, trio, rowH));
+  }
   iconButton(screen, fui::makeRect(static_cast<int16_t>(toybox::kMargin + trio + gutter), y, trio, rowH),
-             icon_rc_claude_40, 40, ActionClaude, false);
+             icon_rc_micoff_40, 40, ActionMicrophone, model.micKnown && model.micMuted);
   // The face is the last VERIFIED answer, and the band is filled while a
   // challenge is out -- four seconds of a locked Mac waking its helper is long
   // enough that an unchanged button reads as one that did nothing.
@@ -290,31 +295,34 @@ void buildForgetConfirm(toybox::Screen& screen, const ForgetModel& model) {
 
 // --- Unlock ----------------------------------------------------------------
 
-void buildPin(toybox::Screen& screen, const PinModel& model) {
-  chrome(screen, model.title, nullptr, false);
+void buildUnlocking(toybox::Screen& screen) {
+  // No chrome: a header band would be a second thing on the screen, and this
+  // one is meant to say exactly one word.
+  const fui::DeviceContext& device = screen.device();
+  const int16_t lineH = screen.target().lineHeight(toybox::kDisplayFont);
+  screen.target().text(fui::makeRect(0, static_cast<int16_t>((device.height - lineH) / 2), device.width, lineH),
+                       "UNLOCKING", plain(toybox::kDisplayFont, fui::TextAlign::Center, fui::Color::Black, 1));
+}
+
+void buildComboSet(toybox::Screen& screen, const ComboSetModel& model) {
+  chrome(screen, model.confirming ? "AGAIN" : "COMBINATION", nullptr, false);
 
   const fui::DeviceContext& device = screen.device();
   const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
   const int16_t gutter = static_cast<int16_t>(toybox::kGutter);
-  int16_t y = static_cast<int16_t>(kBodyTop);
+  int16_t y = static_cast<int16_t>(kBodyTop + toybox::kMargin);
 
-  if (model.detail != nullptr && model.detail[0] != '\0') {
-    const int16_t lineH = screen.target().lineHeight(toybox::kUiFont);
-    screen.target().text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 3)), model.detail,
-                         plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::Black, 3));
-    y = static_cast<int16_t>(y + lineH * 3 + gutter);
-  }
+  const int16_t lineH = screen.target().lineHeight(toybox::kUiFont);
+  screen.target().text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 5)), model.detail,
+                       plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::Black, 5));
+  y = static_cast<int16_t>(y + lineH * 5 + gutter * 2);
 
-  // How many digits, never which. A PIN drawn back at the person typing it is
-  // a PIN readable from across the room, and this one is typed at a lock
-  // screen in public more often than anywhere else.
-  constexpr int16_t kSlot = 18;
-  constexpr int16_t kSlotGap = 14;
-  // As many marks as the SHORTEST PIN the pad will take, and then one more per
-  // digit beyond it. Drawing all twelve up front reads as an instruction to
-  // type twelve, which four-digit PINs are then a failure to follow.
-  const int16_t floorSlots = static_cast<int16_t>(remote::vault::kPinMinLen);
-  const int16_t slots = model.entered > floorSlots ? static_cast<int16_t>(model.entered) : floorSlots;
+  // One mark per press, filled as they land. Which side was pressed is never
+  // drawn: the count is what a person needs to keep their place, and the
+  // sequence is what somebody behind them would need to copy it.
+  constexpr int16_t kSlot = 22;
+  constexpr int16_t kSlotGap = 16;
+  const int16_t slots = static_cast<int16_t>(remote::kComboLength);
   const int16_t slotsWidth = static_cast<int16_t>(slots * kSlot + (slots - 1) * kSlotGap);
   int16_t slotX = static_cast<int16_t>(toybox::kMargin + (width - slotsWidth) / 2);
   for (int16_t i = 0; i < slots; ++i) {
@@ -322,44 +330,9 @@ void buildPin(toybox::Screen& screen, const PinModel& model) {
     if (i < static_cast<int16_t>(model.entered)) {
       screen.target().fill(where, fui::Paint::solid(fui::Color::Black), kSlot / 2);
     } else {
-      // A hairline ring rather than nothing, so the length of the PIN the pad
-      // will take is visible before any of it is typed.
       screen.target().stroke(where, fui::Paint::solid(fui::Color::Black), 1, kSlot / 2);
     }
     slotX = static_cast<int16_t>(slotX + kSlot + kSlotGap);
-  }
-  y = static_cast<int16_t>(y + kSlot + gutter * 2);
-
-  // Ten digits, three to a row, with backspace and confirm on the last -- the
-  // same pad the comic number uses, because a second arrangement of the same
-  // twelve keys is a second thing to learn.
-  const int16_t footerTop = static_cast<int16_t>(device.height - toybox::kMargin);
-  const int16_t keyW = static_cast<int16_t>((width - gutter * 2) / 3);
-  const int16_t keyH = static_cast<int16_t>((footerTop - y - gutter * 3) / 4);
-  static const char* kKeys[12] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "<", "0", "OK"};
-  for (int i = 0; i < 12; ++i) {
-    const int row = i / 3;
-    const int col = i % 3;
-    fui::ButtonProps key;
-    key.label = kKeys[i];
-    // The one key on the pad that is the device agreeing rather than a digit
-    // keeps the primary band; everything else is outlined. Same rule as every
-    // confirm in this fork.
-    const bool primary = i == 11 && model.canConfirm;
-    if (!primary) key.styles = toybox::rowStyles();
-    if (i == 9) {
-      key.action = ActionPinBack;
-      key.enabled = model.entered > 0;
-    } else if (i == 11) {
-      key.action = ActionPinOk;
-      key.enabled = model.canConfirm;
-    } else {
-      key.action = ActionPinDigit;
-      key.value = static_cast<int16_t>(i == 10 ? 0 : i + 1);
-      key.enabled = model.entered < remote::vault::kPinMaxLen;
-    }
-    screen.button(key, fui::makeRect(static_cast<int16_t>(toybox::kMargin + col * (keyW + gutter)),
-                                     static_cast<int16_t>(y + row * (keyH + gutter)), keyW, keyH));
   }
 }
 
@@ -396,6 +369,7 @@ void buildPair(toybox::Screen& screen, const PairModel& model) {
   }
   y = static_cast<int16_t>(y + codeH * 4 + gutter);
 
+  // Either side key does the same as this button; see the detail line.
   const int16_t footerY = static_cast<int16_t>(device.height - toybox::kMargin - kFooterHeight);
   fui::ButtonProps done;
   done.label = "TYPED IT";

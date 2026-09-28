@@ -162,20 +162,8 @@ bool tapConsumer(const uint16_t usage) {
   return true;
 }
 
-// US-layout HID keyboard usage for the characters Spotlight needs. Letters and
-// digits only -- the one string this app types is an application name.
-uint8_t keyboardUsageFor(const char c) {
-  if (c >= 'a' && c <= 'z') return static_cast<uint8_t>(0x04 + (c - 'a'));
-  if (c >= 'A' && c <= 'Z') return static_cast<uint8_t>(0x04 + (c - 'A'));
-  if (c >= '1' && c <= '9') return static_cast<uint8_t>(0x1E + (c - '1'));
-  if (c == '0') return 0x27;
-  if (c == ' ') return 0x2C;
-  return 0;
-}
-
 // US-layout HID keyboard usage plus the shift flag, for every printable ASCII
-// character. A password is not an application name: it has symbols in it, and
-// keyboardUsageFor() above deliberately knows only letters and digits.
+// character, because a password has symbols in it.
 struct KeyStroke {
   uint8_t usage;
   bool shift;
@@ -243,9 +231,15 @@ KeyStroke strokeFor(const char c) {
   }
 }
 
+// A key the hold button has left DOWN, or 0. A HID keyboard report is the
+// whole state of the keyboard, not an event, so a report that leaves this out
+// tells the Mac the key was let go. Every report below therefore carries it,
+// which is what keeps F8 held while seek, lock or the unlock type around it.
+uint8_t heldKey = 0;
+
 bool tapKeyboard(const uint8_t modifiers, const uint8_t key) {
-  uint8_t press[8] = {modifiers, 0, key, 0, 0, 0, 0, 0};
-  const uint8_t release[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  uint8_t press[8] = {modifiers, 0, key, heldKey, 0, 0, 0, 0};
+  const uint8_t release[8] = {0, 0, heldKey, 0, 0, 0, 0, 0};
   if (!notify(keyboardIn, press, sizeof(press))) return false;
   delay(kKeyHoldMs);
   notify(keyboardIn, release, sizeof(release));
@@ -313,6 +307,10 @@ void begin() {
 
 void end() {
   if (!started) return;
+  // Let go of a held key BEFORE the link goes. macOS releases the keys of a
+  // keyboard that disconnects, but a key stuck down on a Mac is bad enough
+  // that this does not rely on it.
+  releaseHeld();
   started = false;
   hostConnected = false;
   // Before deinit, which frees the service this points at.
@@ -339,40 +337,15 @@ bool sendChord(const Chord& chord) {
   return tapKeyboard(chord.modifiers, chord.key);
 }
 
-bool holdChord(const Chord& chord, const uint32_t ms) {
-  if (chord.key == 0) return false;
-  uint8_t press[8] = {chord.modifiers, 0, chord.key, 0, 0, 0, 0, 0};
-  const uint8_t release[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-  if (!notify(keyboardIn, press, sizeof(press))) return false;
-  delay(ms);
-  notify(keyboardIn, release, sizeof(release));
-  delay(kKeyHoldMs);
-  return true;
-}
-
-bool typeText(const char* text) {
-  if (text == nullptr) return false;
-  for (const char* c = text; *c != '\0'; ++c) {
-    const uint8_t usage = keyboardUsageFor(*c);
-    // A character with no usage is skipped rather than aborting: the caller is
-    // typing an application name, and a name that loses a stray character
-    // still lands on the right Spotlight hit.
-    if (usage == 0) continue;
-    if (!tapKeyboard(0, usage)) return false;
-  }
-  return true;
-}
-
 bool sendReturn() { return tapKeyboard(0, 0x28); }
 
 bool typeSecret(const char* text) {
   if (text == nullptr) return false;
   for (const char* c = text; *c != '\0'; ++c) {
     const KeyStroke stroke = strokeFor(*c);
-    // A character with no key is an ABORT, not a skip: typeText() may lose a
-    // stray character out of an application name and still land on the right
-    // hit, but a password with a character missing is a failed attempt the Mac
-    // counts against the account.
+    // A character with no key is an ABORT, not a skip: a password with a
+    // character missing is a failed attempt the Mac counts against the
+    // account.
     if (stroke.usage == 0) {
       LOG_ERR(kTag, "unlock: no US-layout key for a character; typing nothing");
       return false;
@@ -382,12 +355,29 @@ bool typeSecret(const char* text) {
   return true;
 }
 
+bool pressHeld(const uint8_t usage) {
+  if (usage == 0) return false;
+  const uint8_t press[8] = {0, 0, usage, 0, 0, 0, 0, 0};
+  if (!notify(keyboardIn, press, sizeof(press))) return false;
+  heldKey = usage;
+  return true;
+}
+
+bool releaseHeld() {
+  if (heldKey == 0) return true;
+  heldKey = 0;
+  const uint8_t release[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  return notify(keyboardIn, release, sizeof(release));
+}
+
+bool keyHeld() { return heldKey != 0; }
+
 bool wakeHost() {
   // Left shift held down and let go, with no key on the report. Nothing is
   // typed, and a display that was asleep is awake by the time the password
   // starts.
-  const uint8_t press[8] = {0x02, 0, 0, 0, 0, 0, 0, 0};
-  const uint8_t release[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  const uint8_t press[8] = {0x02, 0, heldKey, 0, 0, 0, 0, 0};
+  const uint8_t release[8] = {0, 0, heldKey, 0, 0, 0, 0, 0};
   if (!notify(keyboardIn, press, sizeof(press))) return false;
   delay(kKeyHoldMs);
   notify(keyboardIn, release, sizeof(release));
@@ -429,10 +419,11 @@ Link link() {
 bool ready() { return false; }
 bool send(Key) { return false; }
 bool sendChord(const Chord&) { return false; }
-bool holdChord(const Chord&, uint32_t) { return false; }
-bool typeText(const char*) { return false; }
 bool sendReturn() { return false; }
 bool typeSecret(const char*) { return false; }
+bool pressHeld(uint8_t) { return false; }
+bool releaseHeld() { return true; }
+bool keyHeld() { return false; }
 bool wakeHost() { return false; }
 bool hold(Key, uint32_t) { return false; }
 void setBattery(uint8_t) {}

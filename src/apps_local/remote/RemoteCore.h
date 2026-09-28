@@ -24,11 +24,10 @@
 //    anyone touched the volume on the Mac. Two buttons claim nothing: each tap
 //    is one step, which is exactly what the wire carries.
 //
-// 3. THE SHORTCUT BUTTONS TYPE WHAT A MAC ALREADY UNDERSTANDS. There is no HID
-//    usage for Siri and none for launching an application, so both are
-//    keyboard shortcuts a stock Mac already has, sent as chords. Nothing has
-//    to be bound first. The unlock button beside them is the exception that
-//    needed a protocol rather than a chord -- see RemoteVault.h.
+// 3. THE THIRD ROW IS THREE DIFFERENT KINDS OF BUTTON. F8 is a plain key held
+//    down across two taps, which HID does natively. The microphone and the
+//    padlock need something HID cannot do at all -- an answer from the Mac --
+//    so they ride the unlock helper's GATT service. See RemoteVault.h.
 // ---------------------------------------------------------------------------
 
 #include <cstddef>
@@ -70,23 +69,73 @@ KeyChord backChord(Profile profile);
 const char* forwardSeconds(Profile profile);
 const char* backSeconds(Profile profile);
 
-// --- The shortcut buttons -------------------------------------------------
+// --- The hold button ------------------------------------------------------
 //
-// Each is a chord the Mac already knows, or is told once.
+// One tap presses F8 and leaves it down; the next lets it go. That is what a
+// push-to-talk or dictation app bound to a held key wants, without anyone
+// having to keep a thumb on the panel. HID keyboard usage 0x41.
+inline constexpr uint8_t kHoldKeyUsage = 0x41;
 
-// How long Command-Space is held for Siri. macOS reads a HELD Command-Space as
-// Siri and a TAPPED one as Spotlight -- the same distinction the Mac's own
-// keyboard makes -- so this is the only thing separating the two buttons.
-// A second is what "Hold Command Space" means in System Settings; 1200ms
-// leaves margin for the BLE round trip at either end.
-inline constexpr uint32_t kSiriHoldMs = 1200;
+// --- The unlock combination ----------------------------------------------
+//
+// The two side keys, pressed in order: LEFT and RIGHT. It replaced a touch
+// PIN pad the panel did not register reliably, and a side key always does.
+//
+// FIXED LENGTH, because the unlock screen shows nothing but UNLOCKING and so
+// has no other way to know the entry is finished -- and because the sealed
+// secret has no verifier, the reader cannot tell a right combination from a
+// wrong one until the Mac says so. After exactly kComboLength presses it asks.
+//
+// Eight presses is 256 combinations, far fewer than a four-digit PIN's 10,000.
+// What makes that tolerable is where guessing has to happen: there is nothing
+// on the reader to test a guess against, so every guess goes to the Mac, and
+// the helper stops answering altogether after ten wrong ones in a row until
+// someone at the Mac runs `crossplay-unlock unblock`. Ten tries at 256 is a
+// four percent chance, once.
+inline constexpr size_t kComboLength = 8;
 
-// Command-Space. Held it is Siri, tapped it is Spotlight.
-KeyChord commandSpace();
+enum class SideKey : uint8_t { Left, Right };
 
-// What the Claude button types into Spotlight after opening it. Spotlight is
-// the one route to an application that needs nothing set up on the Mac first.
-inline constexpr const char* kClaudeQuery = "claude";
+// The combination as the digit string RemoteVault seals under: '1' for left,
+// '2' for right. The vault stretches it exactly as it stretched a typed PIN.
+// `out` needs kComboLength + 1 bytes; returns false unless `count` is exactly
+// kComboLength, so a short entry can never reach the Mac as a guess.
+bool comboToPin(const SideKey* keys, size_t count, char* out, size_t size);
+
+// --- The microphone button -----------------------------------------------
+//
+// Reader -> Mac, over the helper's COMMAND characteristic: [version, command].
+// Mac -> reader, over MACSTATE: [version, flags]. There is no HID usage for a
+// microphone and no keyboard shortcut that silences every one, so only the
+// helper can do this.
+//
+// NOT authenticated beyond the Bluetooth bond, deliberately: it has to work
+// without the unlock combination, and the bond already means the only
+// central listening is the Mac that paired. The worst a hijacked command can
+// do is change whether the Mac's microphones are muted.
+
+inline constexpr uint8_t kMacLinkVersion = 1;
+
+enum class MacCommand : uint8_t {
+  MuteMicrophones = 0x01,
+  UnmuteMicrophones = 0x02,
+};
+
+inline constexpr size_t kCommandLen = 2;
+void encodeCommand(MacCommand command, uint8_t out[kCommandLen]);
+bool decodeCommand(const uint8_t* data, size_t len, MacCommand& out);
+
+// What the Mac reports about itself. One bit for now, a byte so it can grow
+// without a new characteristic.
+struct MacState {
+  bool known = false;             // nothing heard yet: the button claims nothing
+  bool microphonesMuted = false;  // every input device the Mac has is muted
+};
+
+inline constexpr size_t kMacStateLen = 2;
+inline constexpr uint8_t kMacStateMicMuted = 0x01;
+void encodeMacState(const MacState& state, uint8_t out[kMacStateLen]);
+bool decodeMacState(const uint8_t* data, size_t len, MacState& out);
 
 // --- Now playing ---------------------------------------------------------
 //

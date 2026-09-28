@@ -10,12 +10,6 @@ constexpr uint8_t kKeyL = 0x0F;
 constexpr uint8_t kKeyJ = 0x0D;
 constexpr uint8_t kKeyRight = 0x4F;
 constexpr uint8_t kKeyLeft = 0x50;
-constexpr uint8_t kKeySpace = 0x2C;
-
-// Modifier bits, mirrored from RemoteHid::Chord.
-constexpr uint8_t kModCtrl = 1;
-constexpr uint8_t kModAlt = 4;
-constexpr uint8_t kModCmd = 8;
 
 }  // namespace
 
@@ -70,8 +64,6 @@ const char* forwardSeconds(const Profile profile) {
 }
 
 const char* backSeconds(const Profile profile) { return profile == Profile::Browser ? "5" : nullptr; }
-
-KeyChord commandSpace() { return KeyChord{kModCmd, kKeySpace}; }
 
 // --- Now playing ---------------------------------------------------------
 
@@ -167,6 +159,47 @@ size_t encodeNowPlaying(const NowPlaying& in, uint8_t* out, const size_t size) {
 
 bool sameNowPlaying(const NowPlaying& a, const NowPlaying& b) {
   return a.state == b.state && std::strcmp(a.title, b.title) == 0 && std::strcmp(a.artist, b.artist) == 0;
+}
+
+// --- The unlock combination ----------------------------------------------
+
+bool comboToPin(const SideKey* keys, const size_t count, char* out, const size_t size) {
+  if (keys == nullptr || out == nullptr || count != kComboLength || size < kComboLength + 1) return false;
+  for (size_t i = 0; i < count; ++i) out[i] = keys[i] == SideKey::Left ? '1' : '2';
+  out[count] = '\0';
+  return true;
+}
+
+// --- The microphone button -----------------------------------------------
+
+void encodeCommand(const MacCommand command, uint8_t out[kCommandLen]) {
+  out[0] = kMacLinkVersion;
+  out[1] = static_cast<uint8_t>(command);
+}
+
+bool decodeCommand(const uint8_t* data, const size_t len, MacCommand& out) {
+  if (data == nullptr || len != kCommandLen || data[0] != kMacLinkVersion) return false;
+  if (data[1] != static_cast<uint8_t>(MacCommand::MuteMicrophones) &&
+      data[1] != static_cast<uint8_t>(MacCommand::UnmuteMicrophones)) {
+    return false;
+  }
+  out = static_cast<MacCommand>(data[1]);
+  return true;
+}
+
+void encodeMacState(const MacState& state, uint8_t out[kMacStateLen]) {
+  out[0] = kMacLinkVersion;
+  out[1] = state.microphonesMuted ? kMacStateMicMuted : 0;
+}
+
+bool decodeMacState(const uint8_t* data, const size_t len, MacState& out) {
+  // Exactly two bytes today. A longer frame from a newer helper is refused
+  // rather than half-read, so a flag this reader does not know about can
+  // never be mistaken for one it does.
+  if (data == nullptr || len != kMacStateLen || data[0] != kMacLinkVersion) return false;
+  out.known = true;
+  out.microphonesMuted = (data[1] & kMacStateMicMuted) != 0;
+  return true;
 }
 
 }  // namespace remote

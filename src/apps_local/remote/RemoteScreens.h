@@ -32,8 +32,8 @@ enum : fui::ActionId {
   ActionPlayPause = 380,
   ActionNext = 381,
   ActionPrevious = 382,
-  ActionSiri = 383,
-  ActionClaude = 384,
+  ActionHoldKey = 383,
+  ActionMicrophone = 384,
   ActionUnlock = 385,
   ActionForward = 386,
   ActionBack = 387,
@@ -44,11 +44,6 @@ enum : fui::ActionId {
   ActionForgetConfirm = 392,
   ActionForgetCancel = 393,
   ActionVolumeDown = 394,
-  // The PIN pad. The digit rides on the action's value the way the comic
-  // number's does, so ten keys cost one action and not ten.
-  ActionPinDigit = 395,
-  ActionPinBack = 396,
-  ActionPinOk = 397,
   ActionPairDone = 398,
 };
 
@@ -91,6 +86,15 @@ struct RemoteModel {
   const char* nowTitle = "";
   const char* nowArtist = "";
 
+  // F8 is down on the Mac because this remote pressed it. Unlike the Mac's
+  // mute, this IS the remote's own state: it is the one holding the key.
+  bool keyHeld = false;
+
+  // What the Mac last said about its microphones. Not known means no helper
+  // has said anything, and the button then claims nothing either way.
+  bool micKnown = false;
+  bool micMuted = false;
+
   UnlockFace unlockFace = UnlockFace::Ask;
 
   // A challenge is in flight. The button's own band carries it, because a
@@ -111,21 +115,23 @@ void buildForgetConfirm(toybox::Screen& screen, const ForgetModel& model);
 
 // --- Unlock ----------------------------------------------------------------
 
-// The PIN pad. Digits only and no letters, because the PIN's whole job is to
-// be typed on a touchscreen in a hurry -- and because what it unseals has no
-// verifier, so its strength comes from the Mac counting wrong answers rather
-// than from its own length.
-struct PinModel {
-  const char* title = "PIN";
-  // One line under the title. Carries the last refusal when there was one:
-  // a wrong PIN is indistinguishable from an unpaired Mac until the Mac says
-  // so, and the screen has to say which it was told.
+// While the side keys are entering the combination. One word and nothing
+// else: no count, no dots, no hint of how many presses remain or whether the
+// last one was right. Someone watching the screen learns only that an unlock
+// is under way.
+void buildUnlocking(toybox::Screen& screen);
+
+// Choosing the combination, once, right after pairing. This screen DOES show
+// how many presses so far, because a combination chosen blind and never
+// confirmed is one the owner can lock themselves out with -- the sealed secret
+// has no verifier, so a slip here is only discovered at the Mac.
+struct ComboSetModel {
+  bool confirming = false;  // the second time through, which must match the first
+  uint8_t entered = 0;      // presses so far, out of kComboLength
   const char* detail = "";
-  uint8_t entered = 0;  // how many digits so far; drawn as marks, never as digits
-  bool canConfirm = false;
 };
 
-void buildPin(toybox::Screen& screen, const PinModel& model);
+void buildComboSet(toybox::Screen& screen, const ComboSetModel& model);
 
 // The pairing code, shown once. Eight groups of four, because thirty-two
 // unbroken characters is a line nobody types correctly.
