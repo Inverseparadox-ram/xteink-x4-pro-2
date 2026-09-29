@@ -137,11 +137,50 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
     // the same place for every song rather than jumping when one lacks a name.
     const int16_t rowH = static_cast<int16_t>(titleH + artistH);
     y = static_cast<int16_t>(y + (rowH > statusSize ? rowH : statusSize) + gutter);
+  } else if (!haveWords && model.connected) {
+    // Nothing playing: the reader's own time over its charge, in the same two
+    // lines a song uses, so the controls under them never move between the
+    // two.
+    const int16_t timeH = screen.target().lineHeight(toybox::kUiFont);
+    const int16_t chargeH = screen.target().lineHeight(toybox::kSmallFont);
+    const int16_t textW = static_cast<int16_t>(width - statusSize - gutter);
+    if (model.clockText != nullptr && model.clockText[0] != '\0') {
+      screen.target().text(fui::makeRect(toybox::kMargin, y, textW, timeH), model.clockText,
+                           plain(toybox::kUiFont, fui::TextAlign::Left, fui::Color::Black, 1));
+    }
+    if (model.batteryPercent >= 0) {
+      // A gauge drawn to the real level, then the number. The number is the
+      // fact; the gauge is what reads at a glance.
+      const int16_t bodyW = 26;
+      const int16_t bodyH = 13;
+      const int16_t gaugeY = static_cast<int16_t>(y + timeH + (chargeH - bodyH) / 2);
+      const fui::Rect body = fui::makeRect(toybox::kMargin, gaugeY, bodyW, bodyH);
+      screen.target().stroke(body, fui::Paint::solid(fui::Color::Black), 2, 2);
+      screen.target().fill(fui::makeRect(static_cast<int16_t>(toybox::kMargin + bodyW),
+                                         static_cast<int16_t>(gaugeY + 4), 3, static_cast<int16_t>(bodyH - 8)),
+                           fui::Paint::solid(fui::Color::Black));
+      const int percent = model.batteryPercent > 100 ? 100 : model.batteryPercent;
+      const int16_t inner = static_cast<int16_t>((bodyW - 6) * percent / 100);
+      if (inner > 0) {
+        screen.target().fill(fui::makeRect(static_cast<int16_t>(toybox::kMargin + 3), static_cast<int16_t>(gaugeY + 3),
+                                           inner, static_cast<int16_t>(bodyH - 6)),
+                             fui::Paint::solid(fui::Color::Black));
+      }
+      char charge[8];
+      std::snprintf(charge, sizeof(charge), "%d%%", percent);
+      screen.target().text(fui::makeRect(static_cast<int16_t>(toybox::kMargin + bodyW + 3 + gutter / 2),
+                                         static_cast<int16_t>(y + timeH), textW, chargeH),
+                           charge, plain(toybox::kSmallFont, fui::TextAlign::Left, fui::Color::Black, 1));
+    }
+    screen.target().bitmap(
+        fui::makeRect(static_cast<int16_t>(toybox::kMargin + width - statusSize), y, statusSize, statusSize),
+        fui::bitmapFromIcon(icon_rc_btok_32), fui::BitmapMode::Contain, fui::Paint::solid(fui::Color::Black));
+    const int16_t rowH = static_cast<int16_t>(timeH + chargeH);
+    y = static_cast<int16_t>(y + (rowH > statusSize ? rowH : statusSize) + gutter);
   } else if (!haveWords) {
     screen.target().bitmap(
         fui::makeRect(static_cast<int16_t>(toybox::kMargin + width - statusSize), y, statusSize, statusSize),
-        fui::bitmapFromIcon(model.connected ? icon_rc_btok_32 : icon_rc_bt_32), fui::BitmapMode::Contain,
-        fui::Paint::solid(fui::Color::Black));
+        fui::bitmapFromIcon(icon_rc_bt_32), fui::BitmapMode::Contain, fui::Paint::solid(fui::Color::Black));
     y = static_cast<int16_t>(y + statusSize + gutter);
   } else {
     const int16_t lineH = screen.target().lineHeight(toybox::kUiFont);
@@ -208,14 +247,8 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
   // is muted. The microphone stays outlined until the Mac has said anything,
   // rather than guessing.
   const int16_t trio = static_cast<int16_t>((width - 2 * gutter) / 3);
-  {
-    // A label, not a mark: the button IS that key, and no picture says F8.
-    fui::ButtonProps hold;
-    hold.label = "F8";
-    hold.action = ActionHoldKey;
-    if (!model.keyHeld) hold.styles = toybox::rowStyles();
-    screen.button(hold, fui::makeRect(toybox::kMargin, y, trio, rowH));
-  }
+  // A pen, for what holding F8 is for here: dictation.
+  iconButton(screen, fui::makeRect(toybox::kMargin, y, trio, rowH), icon_rc_pen_40, 40, ActionHoldKey, model.keyHeld);
   iconButton(screen, fui::makeRect(static_cast<int16_t>(toybox::kMargin + trio + gutter), y, trio, rowH),
              icon_rc_micoff_40, 40, ActionMicrophone, model.micKnown && model.micMuted);
   // The face is the last VERIFIED answer, and the band is filled while a
@@ -233,24 +266,16 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
   // read a level back. Two buttons claim nothing: one tap is one step, which
   // is exactly what goes over the wire.
   //
-  // The speaker mark stays as the row's label so a bare minus and plus are not
-  // left to say on their own which of several things they change.
-  const int16_t markSize = 32;
-  screen.target().bitmap(
-      fui::makeRect(toybox::kMargin, static_cast<int16_t>(y + (rowH - markSize) / 2), markSize, markSize),
-      fui::bitmapFromIcon(icon_rc_vol_32), fui::BitmapMode::Contain, fui::Paint::solid(fui::Color::Black));
-
-  const int16_t volLeft = static_cast<int16_t>(toybox::kMargin + markSize + gutter);
-  const int16_t volWidth = static_cast<int16_t>(width - markSize - gutter);
-  const int16_t volThird = static_cast<int16_t>((volWidth - 2 * gutter) / 3);
-  iconButton(screen, fui::makeRect(volLeft, y, volThird, rowH), icon_rc_voldn_40, 40, ActionVolumeDown, false);
-  iconButton(screen, fui::makeRect(static_cast<int16_t>(volLeft + volThird + gutter), y, volThird, rowH),
+  // The same three columns as the row above, edge to edge, so the panel reads
+  // as a grid rather than two rows that almost line up.
+  iconButton(screen, fui::makeRect(toybox::kMargin, y, trio, rowH), icon_rc_voldn_40, 40, ActionVolumeDown, false);
+  iconButton(screen, fui::makeRect(static_cast<int16_t>(toybox::kMargin + trio + gutter), y, trio, rowH),
              icon_rc_volup_40, 40, ActionVolumeUp, false);
   // Filled while muted, so the button's own band carries the one piece of
   // state the remote is entitled to remember: that IT sent a mute.
   iconButton(screen,
-             fui::makeRect(static_cast<int16_t>(volLeft + 2 * (volThird + gutter)), y,
-                           static_cast<int16_t>(volWidth - 2 * (volThird + gutter)), rowH),
+             fui::makeRect(static_cast<int16_t>(toybox::kMargin + 2 * (trio + gutter)), y,
+                           static_cast<int16_t>(width - 2 * (trio + gutter)), rowH),
              icon_rc_mute_32, 32, ActionMute, model.muted);
 
   // --- The profile, which is the only word left -------------------------

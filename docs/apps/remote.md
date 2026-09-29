@@ -80,7 +80,7 @@ is a media key.
 
 | Button | Does | Needs the helper? |
 | --- | --- | --- |
-| **F8** | One tap presses F8 and leaves it down; the next lets it go | No -- it is a plain key |
+| **Pen** | One tap presses F8 and leaves it down; the next lets it go | No -- it is a plain key |
 | **Microphone** | Mutes every microphone the Mac has; tap again to unmute | Yes |
 | **Padlock** | Unlocks on one tap, or locks with `⌃⌘Q` | Yes, to unlock |
 
@@ -296,23 +296,26 @@ bonded Mac.
 ## The screen is marks, not words
 
 Every control is an icon: 64px prev / play-pause / next across the top, the two
-circular seek arrows, then the three shortcuts at 40px, then a speaker mark
-with volume down, volume up and mute. Three pieces of text survive the whole
-panel, and each one is there because no drawing does its job:
+circular seek arrows, then a pen, the microphone and the padlock at 40px, then
+volume down, volume up and mute in the same three columns, so the bottom two
+rows read as one grid. Three pieces of text survive the whole panel, and each
+one is there because no drawing does its job:
 
 - the **two seek numbers**, under the one profile that defines them;
 - the **profile name** in the footer, because no mark distinguishes YouTube
   from IINA from a blind scrub while the seek buttons mean different things
   under each;
-- the **status sentence**, because nothing draws "System Settings > Bluetooth"
-  and nothing draws "the unlock helper is not running" either. Connected with
-  nothing to report, it collapses to a single bluetooth glyph -- the live
-  controls under it are the rest of the message.
+- the **status row**, which says the most useful thing it has, in this order:
+  how to pair ("System Settings > Bluetooth", which nothing draws); why the
+  padlock refused; what the Mac is playing; and otherwise the reader's own time
+  and charge, as a clock line over a small battery gauge filled to the real
+  level beside the percentage. Song and clock take the same two lines, so the
+  controls never move between them, and the clock repaints once a minute
+  while it is showing and never otherwise.
 
 The one screen behind the panel that uses words is the **pairing code**, which
 is a code from another machine and cannot be a picture.
 
-The F8 button's face is a word too, because the button *is* that key.
 
 `host-tests/ui` asserts the absence directly: it renders the panel and fails if
 `PLAY/PAUSE`, `VOLUME`, `MUTE`, `FWD`, `PREV`, `NEXT`, `SIRI`, `CLAUDE`, `DND`,

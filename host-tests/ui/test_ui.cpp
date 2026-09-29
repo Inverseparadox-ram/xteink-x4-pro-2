@@ -10558,9 +10558,9 @@ void testALongTitleIsCutNotWrapped() {
   CHECK(rectOf(shortTitle, remoteui::ActionPlayPause).y == rectOf(noArtist, remoteui::ActionPlayPause).y);
 }
 
-// F8 is the one button whose face is a word: the button IS that key, and no
-// picture says F8. The microphone is live whether or not the Mac has said
-// anything yet -- a button waiting on a report nobody sent would be dead.
+// The hold button is a pen, not the word F8 -- the panel is marks. The
+// microphone is live whether or not the Mac has said anything yet -- a button
+// waiting on a report nobody sent would be dead.
 void testTheHoldAndMicrophoneButtonsAreAlwaysLive() {
   for (int state = 0; state < 4; ++state) {
     Rendered out;
@@ -10571,7 +10571,7 @@ void testTheHoldAndMicrophoneButtonsAreAlwaysLive() {
     model.micKnown = (state & 2) != 0;
     model.micMuted = model.micKnown;
     buildTheRemote(out, model);
-    CHECK(drewText(out, "F8"));
+    CHECK(!drewText(out, "F8"));
     for (const fui::ActionId action : {remoteui::ActionHoldKey, remoteui::ActionMicrophone}) {
       fui::Rect rect{};
       for (size_t i = 0; i < out.interactions.count(); ++i) {
@@ -10596,6 +10596,55 @@ void testThePairingCodeIsGrouped() {
   CHECK(drewText(out, "EQ6J AJW4"));
   CHECK(drewText(out, "DS5Y 56AM"));
   CHECK(!drewText(out, "EQ6JAJW4WBNF59M141KM6D5JDS5Y56AM"));
+}
+
+// Nothing playing: the status row shows the reader's own time and charge, in
+// the same two lines a song takes, so the controls never move between the two.
+// And when either fact is unknown it is left out, not guessed.
+void testTheIdleRowShowsTimeAndChargeWithoutMovingAnything() {
+  auto rectOf = [](const Rendered& r, const fui::ActionId action) {
+    for (size_t i = 0; i < r.interactions.count(); ++i) {
+      if (r.interactions.data()[i].action == action) return r.interactions.data()[i].rect;
+    }
+    return fui::Rect{};
+  };
+
+  Rendered idle;
+  remoteui::RemoteModel model;
+  model.connected = true;
+  model.profileName = "YOUTUBE";
+  model.clockText = "10:42 AM";
+  model.batteryPercent = 84;
+  buildTheRemote(idle, model);
+  CHECK(drewText(idle, "10:42 AM"));
+  CHECK(drewText(idle, "84%"));
+
+  Rendered song;
+  model.nowTitle = "Harvest Moon";
+  model.nowArtist = "Neil Young";
+  buildTheRemote(song, model);
+  CHECK(drewText(song, "Harvest Moon"));
+  CHECK(!drewText(song, "10:42 AM"));
+  CHECK(rectOf(idle, remoteui::ActionPlayPause).y == rectOf(song, remoteui::ActionPlayPause).y);
+  CHECK(rectOf(idle, remoteui::ActionProfile).y == rectOf(song, remoteui::ActionProfile).y);
+
+  Rendered unknown;
+  model.nowTitle = "";
+  model.nowArtist = "";
+  model.clockText = "";
+  model.batteryPercent = -1;
+  buildTheRemote(unknown, model);
+  CHECK(!drewText(unknown, "%"));
+  CHECK(rectOf(idle, remoteui::ActionPlayPause).y == rectOf(unknown, remoteui::ActionPlayPause).y);
+
+  // Rows three and four are one grid: the volume row's first button starts
+  // where the pen's does and ends where it ends.
+  const fui::Rect pen = rectOf(idle, remoteui::ActionHoldKey);
+  const fui::Rect down = rectOf(idle, remoteui::ActionVolumeDown);
+  const fui::Rect mute = rectOf(idle, remoteui::ActionMute);
+  const fui::Rect lock = rectOf(idle, remoteui::ActionUnlock);
+  CHECK(pen.x == down.x && pen.width == down.width);
+  CHECK(lock.x == mute.x && lock.width == mute.width);
 }
 
 // Every control the clock claims to have is registered and wins the hit test
@@ -15675,6 +15724,7 @@ int main() {
   testALongTitleIsCutNotWrapped();
   testTheStatusRowCanCarryTheUnlockMessage();
   testTheHoldAndMicrophoneButtonsAreAlwaysLive();
+  testTheIdleRowShowsTimeAndChargeWithoutMovingAnything();
   testThePairingCodeIsGrouped();
   testEveryForecastViewOffersAllThreeSegments();
   testAnUnreportedFieldIsNotDrawnAsZero();

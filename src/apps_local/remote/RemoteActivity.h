@@ -108,6 +108,11 @@ class RemoteActivity final : public Activity {
   // the app opening, the Mac reconnecting -- can trigger a status check.
   bool helperWasPresent_ = false;
 
+  // The status row's clock, and the minute it was last drawn at, so the panel
+  // repaints once a minute while it shows the time and never otherwise.
+  char clockText_[12] = {};
+  int lastClockMinute_ = -1;
+
   // Last time the link state was drawn, so the screen can follow a connection
   // appearing without repainting e-ink on a timer.
   remote::Link lastLink_ = remote::Link::Off;

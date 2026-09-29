@@ -86,6 +86,12 @@ struct RemoteModel {
   const char* nowTitle = "";
   const char* nowArtist = "";
 
+  // What the same row shows when nothing is playing: the reader's own time
+  // and charge. Empty time when the clock has never been set; a negative
+  // charge when it cannot be read. Either is left out rather than guessed.
+  const char* clockText = "";
+  int8_t batteryPercent = -1;
+
   // F8 is down on the Mac because this remote pressed it. Unlike the Mac's
   // mute, this IS the remote's own state: it is the one holding the key.
   bool keyHeld = false;

@@ -10,11 +10,14 @@
 #include <Preferences.h>
 #endif
 
+#include <HalClock.h>
+
 #include <cstdio>
 #include <cstring>
 
 #include "../../components/UITheme.h"
 #include "../Shelf.h"
+#include "../clock/ClockCore.h"
 #include "../ui/ToyboxFonts.h"
 #include "../ui/ToyboxTheme.h"
 
@@ -526,6 +529,18 @@ void RemoteActivity::loop() {
     nowPlaying_ = next;
     requestUpdate();
   }
+  // The time in the status row changes once a minute, and nothing else would
+  // repaint it. Only while it is actually on screen: a song hides it.
+  if (phase_ == Phase::Remote && remote::link() == remote::Link::Connected && !nowPlaying_.present()) {
+    struct tm now = {};
+    if (halClock.localTime(now)) {
+      const int minuteOfDay = now.tm_hour * 60 + now.tm_min;
+      if (minuteOfDay != lastClockMinute_) {
+        lastClockMinute_ = minuteOfDay;
+        requestUpdate();
+      }
+    }
+  }
   remote::MacState macNext;
   if (remote::helper::takeMacState(macNext)) {
     RenderLock lock(*this);
@@ -693,6 +708,18 @@ void RemoteActivity::render(RenderLock&&) {
     if (nowPlaying_.present()) {
       model.nowTitle = nowPlaying_.title;
       model.nowArtist = nowPlaying_.artist;
+    } else {
+      // Read the way the Clock app reads it, and formatted by the same
+      // function, so the two never disagree about what time it is.
+      struct tm now = {};
+      if (halClock.localTime(now) && now.tm_year >= 120) {
+        clockapp::Civil civil;
+        civil.hour = static_cast<uint8_t>(now.tm_hour);
+        civil.minute = static_cast<uint8_t>(now.tm_min);
+        clockapp::formatClock(civil, clockText_, sizeof(clockText_));
+        model.clockText = clockText_;
+      }
+      model.batteryPercent = static_cast<int8_t>(powerManager.getBatteryPercentage());
     }
     model.forwardSeconds = remote::forwardSeconds(profile_);
     model.backSeconds = remote::backSeconds(profile_);
