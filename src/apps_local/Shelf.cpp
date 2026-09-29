@@ -25,6 +25,7 @@
 #include "go/GoActivity.h"
 #include "hackernews/HackerNewsActivity.h"
 #include "hearts/HeartsActivity.h"
+#include "hex/HexActivity.h"
 #include "insider/InsiderActivity.h"
 #include "instapaper/InstapaperActivity.h"
 #include "jaipur/JaipurActivity.h"
@@ -42,10 +43,12 @@
 #include "toybattle/ToyBattleActivity.h"
 #include "trivia/TriviaActivity.h"
 #include "ui/ToyboxIcons.h"
+#include "underhand/UnderhandActivity.h"
 #include "wallpapers/WallpapersActivity.h"
 #include "wavelength/WavelengthActivity.h"
 #include "weather/WeatherActivity.h"
 #include "wikipedia/WikipediaActivity.h"
+#include "wordle/WordleActivity.h"
 #include "xkcd/XkcdActivity.h"
 #include "yahtzee/YahtzeeActivity.h"
 
@@ -77,6 +80,9 @@ constexpr shelf::Item kGames[] = {
     {"TRIVIA", &icon_trivia_32, &TriviaActivity::create},
     {"WAVELENGTH", &icon_wavelength_32, &WavelengthActivity::create},
     {"GO", &icon_go_32, &GoActivity::create},
+    {"HEX", &icon_hex_32, &HexActivity::create},
+    {"UNDERHAND", &icon_underhand_32, &UnderhandActivity::create},
+    {"WORDLE", &icon_wordle_32, &WordleActivity::create},
 };
 constexpr shelf::Item kApps[] = {
     {"STUDY", &icon_study_32, &StudyActivity::create},

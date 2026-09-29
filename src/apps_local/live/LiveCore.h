@@ -100,6 +100,17 @@ bool clockIsUsable(int64_t nowEpoch);
 std::string unquoteEtag(const std::string& raw);
 
 // ---------------------------------------------------------------------------
+// The battery, as a pull reports it.
+//
+// X-Battery carries a whole percent and ONLY a real one. A gauge that could not
+// be read is -1 here and no header at all on the wire: sent as "0" it would
+// reach the website as a flat battery, a confident number that sends somebody
+// across town with a charger for a reader that is fine.
+//
+// Empty means "send no header".
+std::string batteryHeader(int percent);
+
+// ---------------------------------------------------------------------------
 // Did the whole picture arrive?
 //
 // Live's images are BMPs the website makes, and their SIZE IS NOT FIXED: the
@@ -210,6 +221,25 @@ uint32_t waitSeconds(const Schedule& schedule);
 // with no wall clock at all, so it can carry the schedule on its own and the
 // user's own sleeps can decline.
 Decision decide(const Schedule& schedule, int64_t nowEpoch, bool timerFired = false);
+
+// ---------------------------------------------------------------------------
+// The alarm a sleep owes Live when it is NOT a Live sleep.
+//
+// main.cpp has two ways back into deep sleep that never reach enterDeepSleep:
+// a power-button wake that was not held through verification (a bump, a
+// brush), and a USB-power cold boot on boards that go straight back down. Both
+// used to arm the build's own timer, which is 0 on every release env -- so one
+// bump disarmed Live and the reader slept until a person woke it. Mario's
+// fridge, 2026-09-28: checked at 11:12, bumped at 12:06, asleep 28.7 hours,
+// and its 02:00 check never happened (card #620).
+//
+// This is the number those paths arm instead. It never fetches: they run with
+// no display and no fonts, so a check that is DUE is handed to a timer wake
+// kDueResleepSeconds from now, which runs it unattended the way every
+// scheduled check runs. 0 only when Live has nothing to schedule (off, or not
+// paired), which is the case the build's own timer is for.
+constexpr uint32_t kDueResleepSeconds = 60;
+uint32_t resleepSeconds(const Schedule& schedule, int64_t nowEpoch);
 
 // ---------------------------------------------------------------------------
 // The two lines the Live screen leads with.

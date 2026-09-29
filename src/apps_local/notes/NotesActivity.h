@@ -52,6 +52,14 @@ class NotesActivity final : public Activity {
   void clearDone();
   // Rewrites the note as the other kind: a tick box on every line, or none.
   void switchKind();
+  // The Notes menu's PUT ON SLEEP SCREEN row: choose this note for the sleep
+  // screen and switch Settings > Sleep screen to Note, or undo both.
+  void toggleAsleep();
+  // After a rename or a delete, so the sleep screen never names a note that is
+  // no longer there under that name.
+  void asleepRenamed(const std::string& from, const std::string& to);
+  void asleepDeleted(const std::string& name);
+  bool isShownAsleep() const;
   void askNewName();
   // What the note being made is for. Only consulted while it is still empty;
   // the first line written settles the kind in the file itself.
@@ -79,7 +87,10 @@ class NotesActivity final : public Activity {
   void relabelNote();
   // How many rows fit one page, asked of the same layout that draws them, so
   // the label, the physical keys and the rows on the glass cannot disagree.
-  int notePageSize();
+  // Where each page of the open note begins (see notesui::notePageStarts),
+  // and which of them noteTop_ falls on.
+  std::vector<int> notePageStarts();
+  int notePageOf(const std::vector<int>& starts) const;
   int deckPageSize();
 
   notes::Library library_;

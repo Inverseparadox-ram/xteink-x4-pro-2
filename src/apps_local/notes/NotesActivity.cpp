@@ -7,6 +7,7 @@
 
 #include <cstdio>
 
+#include "../../CrossPointSettings.h"
 #include "../../DevMode.h"
 #include "../../activities/ActivityResult.h"
 #include "../../activities/network/WifiSelectionActivity.h"
@@ -14,10 +15,14 @@
 #include "../../util/DeviceHostname.h"
 #include "../../util/QrUtils.h"
 #include "../Shelf.h"
+#include "../live/LiveBridge.h"
+#include "../live/LiveEngine.h"
+#include "../live/LiveStore.h"
 #include "../ui/ToyboxFonts.h"
 #include "../ui/ToyboxIcons.h"
 #include "../ui/ToyboxTheme.h"
 #include "NotesCore.h"
+#include "NotesSleep.h"
 
 namespace fui = freeink::ui;
 
@@ -77,30 +82,12 @@ void NotesActivity::rebuildRows() {
 
   taskTexts_.clear();
   rowLine_.clear();
-  taskTexts_.reserve(lines_.size());
-  rowLine_.reserve(lines_.size());
-  for (size_t i = 0; i < lines_.size(); i++) {
-    const notes::Line& line = lines_[i];
-    // NO BLANK ROWS, anywhere in the file. An empty line drawn as an item is an
-    // empty tick box: a hole in the list with nothing to tick and nothing to
-    // read, and Mario's own note had three of them. counts() already skips
-    // them, so drawing them made the tally disagree with the rows as well.
-    // The file keeps its blank lines; they are spacing, not things to do.
-    if (line.begin >= line.end) continue;
-    // Nor a marker with nothing after it. "- [x] " on its own is a ticked box
-    // with no text: still a hole in the list, and still something the file can
-    // legitimately contain.
-    std::string text = notes::textOf(doc_, line);
-    bool blank = true;
-    for (const char c : text) {
-      if (c != ' ' && c != '\t') {
-        blank = false;
-        break;
-      }
-    }
-    if (blank) continue;
+  // NO BLANK ROWS, anywhere in the file, and no marker with nothing after it:
+  // either would be an empty tick box, a hole in the list. The rule lives in
+  // notes::drawnLines because the sleep screen draws these same rows.
+  for (const size_t i : notes::drawnLines(doc_, lines_)) {
     rowLine_.push_back(i);
-    taskTexts_.push_back(std::move(text));
+    taskTexts_.push_back(notes::textOf(doc_, lines_[i]));
   }
   taskRows_.clear();
   taskRows_.reserve(taskTexts_.size());
@@ -123,10 +110,7 @@ bool NotesActivity::anyDone() const {
 
 int NotesActivity::deckPageSize() {
   fui::GfxRendererTarget target = toybox::makeTarget(renderer);
-  notesui::DeckModel probe;
-  probe.items = deckRows_.data();
-  probe.count = static_cast<int>(deckRows_.size());
-  return notesui::deckCapacity(target, target.deviceContext(), probe);
+  return notesui::deckCapacity(target.deviceContext());
 }
 
 notesui::NoteModel NotesActivity::noteModel() const {
@@ -144,14 +128,24 @@ notesui::NoteModel NotesActivity::noteModel() const {
   return model;
 }
 
-int NotesActivity::notePageSize() {
+std::vector<int> NotesActivity::notePageStarts() {
   fui::GfxRendererTarget target = toybox::makeTarget(renderer);
   // The model as it will be DRAWN. A probe missing the kind measured a list's
   // tick boxes against a page's text width, and a probe missing the tally
   // measured against a band the progress strip was not standing in -- which
   // fits one row more than the screen draws, so the last item of a page went
   // missing while the page label counted it.
-  return notesui::noteCapacity(target, target.deviceContext(), noteModel());
+  return notesui::notePageStarts(target, target.deviceContext(), noteModel());
+}
+
+// Which page noteTop_ is on: the last page that starts at or before it. After
+// an edit the pages move, and noteTop_ may point into the middle of one.
+int NotesActivity::notePageOf(const std::vector<int>& starts) const {
+  int page = 0;
+  for (size_t p = 0; p < starts.size(); p++) {
+    if (starts[p] <= noteTop_) page = static_cast<int>(p);
+  }
+  return page;
 }
 
 void NotesActivity::relabelDeck() {
@@ -165,13 +159,128 @@ void NotesActivity::relabelDeck() {
 }
 
 void NotesActivity::relabelNote() {
-  const int page = notePageSize();
-  const int count = static_cast<int>(taskRows_.size());
+  const std::vector<int> starts = notePageStarts();
+  const int page = notePageOf(starts);
+  // Snapped to the start of its page, so the page drawn is a page the count
+  // agrees exists rather than one that begins halfway down another.
+  noteTop_ = starts[static_cast<size_t>(page)];
   notePage_.clear();
-  if (page <= 0 || count <= page) return;
+  if (starts.size() <= 1) return;
   char label[32];
-  std::snprintf(label, sizeof(label), "%d / %d", noteTop_ / page + 1, (count + page - 1) / page);
+  std::snprintf(label, sizeof(label), "%d / %d", page + 1, static_cast<int>(starts.size()));
   notePage_ = label;
+}
+
+// --- The sleep screen ----------------------------------------------------
+
+namespace {
+// What "stop showing a note while asleep" puts back: the mode the note
+// replaced, unless nothing was recorded or what was recorded is Note itself,
+// in which case the setting's own default.
+uint8_t modeToRestore(const int previousMode) {
+  if (previousMode >= 0 && previousMode < CrossPointSettings::SLEEP_SCREEN_MODE_COUNT &&
+      previousMode != CrossPointSettings::SLEEP_SCREEN_MODE::NOTE) {
+    return static_cast<uint8_t>(previousMode);
+  }
+  return static_cast<uint8_t>(CrossPointSettings::SLEEP_SCREEN_MODE::DARK);
+}
+
+// Put back both settings a note replaced. Quick Resume on Timeout is touched
+// only when the choice recorded it.
+void restoreSleepSettings(const notes::AsleepChoice& choice) {
+  SETTINGS.sleepScreen = modeToRestore(choice.previousMode);
+  if (choice.previousQuickResume == 1) {
+    SETTINGS.quickResumeSleepScreen = CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
+  } else if (choice.previousQuickResume == 0) {
+    SETTINGS.quickResumeSleepScreen = CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_NEVER;
+  }
+  SETTINGS.saveToFile();
+}
+}  // namespace
+
+bool NotesActivity::isShownAsleep() const {
+  if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::NOTE) return false;
+  notes::AsleepChoice choice;
+  return notes::readAsleep(choice) && choice.name == openName_;
+}
+
+void NotesActivity::toggleAsleep() {
+  bool reportLiveOff = false;
+  std::string liveToken;
+  notes::AsleepChoice current;
+  const bool hadChoice = notes::readAsleep(current);
+  if (isShownAsleep()) {
+    // Put back what was there. A choice with nothing recorded, or one that
+    // recorded Note itself, falls back to the setting's own default.
+    notes::clearAsleep();
+    restoreSleepSettings(current);
+    LOG_INF("NOTES", "'%s' no longer shown while asleep; sleep screen mode back to %d, quick resume on timeout %d",
+            openName_.c_str(), SETTINGS.sleepScreen, SETTINGS.quickResumeSleepScreen);
+  } else {
+    notes::AsleepChoice choice;
+    choice.name = openName_;
+    // Switching from one note to another keeps the mode the FIRST note
+    // replaced, so stopping later still puts back the person's own screen.
+    const bool alreadyNote = SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::NOTE;
+    choice.previousMode =
+        alreadyNote ? (hadChoice ? current.previousMode : -1) : static_cast<int>(SETTINGS.sleepScreen);
+    choice.previousQuickResume = alreadyNote ? (hadChoice ? current.previousQuickResume : -1)
+                                             : static_cast<int>(SETTINGS.quickResumeSleepScreen);
+    if (!notes::writeAsleep(choice)) {
+      showNotice("The card would not take the change. Nothing was changed.");
+      return;
+    }
+    SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::NOTE;
+    // Quick resume on an idle sleep shows the last screen and skips the sleep
+    // screen entirely, so a chosen note would never appear on the ordinary
+    // sleep. The same trade the Wallpapers app makes, for the same reason.
+    SETTINGS.quickResumeSleepScreen = CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_NEVER;
+    SETTINGS.saveToFile();
+    LOG_INF("NOTES", "'%s' shown while asleep (replaced sleep screen mode %d, quick resume on timeout %d)",
+            openName_.c_str(), choice.previousMode, choice.previousQuickResume);
+    // Live and a note are mutually exclusive, as Live and a wallpaper are: left
+    // on, Live would go on waking the device for pictures the note hides, and
+    // the phone's page would go on saying they arrived. The pairing is kept.
+    live::State liveState;
+    if (live::load(liveState) && liveState.on) {
+      liveState.on = false;
+      live::save(liveState);
+      reportLiveOff = liveState.paired();
+      liveToken = liveState.deviceToken;
+      LOG_INF("NOTES", "a note is on the sleep screen, so Live is off; its pairing is kept");
+    }
+  }
+  view_ = View::Note;
+  interactionsReady_ = false;
+  if (!reportLiveOff) {
+    requestUpdate();
+    return;
+  }
+  // Tell the phone's page, the way Wallpapers does, after the note is on the
+  // glass. A courtesy: the card already says off, so a failure here costs the
+  // page its "off on the reader" line and nothing else.
+  requestUpdateAndWait();
+  std::string message;
+  live::engine::RadioLease radio(message);
+  if (!radio.held()) {
+    LOG_INF("NOTES", "no radio to tell Live this reader is off; the website will work it out");
+    return;
+  }
+  live::reportOff(liveToken, message);
+}
+
+void NotesActivity::asleepRenamed(const std::string& from, const std::string& to) {
+  notes::AsleepChoice choice;
+  if (!notes::readAsleep(choice) || choice.name != from) return;
+  choice.name = to;
+  notes::writeAsleep(choice);
+}
+
+void NotesActivity::asleepDeleted(const std::string& name) {
+  notes::AsleepChoice choice;
+  if (!notes::readAsleep(choice) || choice.name != name) return;
+  notes::clearAsleep();
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::NOTE) restoreSleepSettings(choice);
 }
 
 // --- Navigation ----------------------------------------------------------
@@ -201,8 +310,9 @@ void NotesActivity::reloadNote() {
 void NotesActivity::refreshFromDoc() {
   lines_ = notes::parse(doc_);
   rebuildRows();
-  const int count = static_cast<int>(taskRows_.size());
-  if (noteTop_ >= count) noteTop_ = 0;
+  // relabelNote snaps noteTop_ onto a real page start. It is NOT compared with
+  // the item count: on a note it counts LINES, and a note on its third page has
+  // a noteTop_ past its number of paragraphs that is still perfectly valid.
   relabelNote();
 }
 
@@ -382,6 +492,7 @@ void NotesActivity::askRename() {
       showNotice(message);
       return;
     }
+    asleepRenamed(openName_, notes::Library::sanitise(entered.text));
     openName_ = notes::Library::sanitise(entered.text);
     reloadNote();
     view_ = View::Note;
@@ -442,11 +553,16 @@ void NotesActivity::askLine() {
     // NOT reloadNote(): doc_ is what was just written, byte for byte. Reading
     // it back turned every OK into a second trip to the card.
     refreshFromDoc();
-    // Onto the page the new line landed on, so a line added to a long list is
-    // visibly there rather than two pages away.
-    const int page = notePageSize();
-    const int count = static_cast<int>(taskRows_.size());
-    if (page > 0 && count > 0) noteTop_ = ((count - 1) / page) * page;
+    // Onto the page the new line BEGINS on, so it is visibly there rather than
+    // pages away. Not the last page: on a note a long paragraph flows, and one
+    // added at the end can start on the page before the last.
+    {
+      fui::GfxRendererTarget target = toybox::makeTarget(renderer);
+      const int item = static_cast<int>(taskRows_.size()) - 1;
+      const std::vector<int> starts = notePageStarts();
+      const int page = notesui::notePageOfItem(target, target.deviceContext(), noteModel(), item < 0 ? 0 : item);
+      noteTop_ = starts[static_cast<size_t>(page)];
+    }
     relabelNote();
     LOG_DBG("NOTES", "add: save %ums, rows %ums, %d items", savedAt - startedAt, millis() - savedAt,
             static_cast<int>(taskRows_.size()));
@@ -496,7 +612,7 @@ void NotesActivity::startPhone() {
     showNotice("There was not enough memory to start.");
     return;
   }
-  server_->setNotesFile(std::string("/notes/") + openName_ + ".md", openName_);
+  server_->setNotesFile(std::string("/notes/") + openName_ + ".md", openName_, !openIsPage());
   server_->begin();
   // The simulator has no networking shim, so begin() never leaves the server
   // running there. The SCREEN is still drawn, because its layout is the half
@@ -612,11 +728,11 @@ void NotesActivity::loop() {
       return;
     }
     if (view_ == View::Note) {
-      const int page = notePageSize();
-      const int count = static_cast<int>(taskRows_.size());
-      const int next = down ? noteTop_ + page : noteTop_ - page;
-      if (page > 0 && count > page && next >= 0 && next < count) {
-        noteTop_ = next;
+      const std::vector<int> starts = notePageStarts();
+      const int page = notePageOf(starts);
+      const int next = down ? page + 1 : page - 1;
+      if (next >= 0 && next < static_cast<int>(starts.size())) {
+        noteTop_ = starts[static_cast<size_t>(next)];
         relabelNote();
         interactionsReady_ = false;
         requestUpdate();
@@ -680,6 +796,9 @@ void NotesActivity::loop() {
     case notesui::ActionSwitchKind:
       switchKind();
       return;
+    case notesui::ActionShowAsleep:
+      toggleAsleep();
+      return;
     case notesui::ActionRename:
       askRename();
       return;
@@ -698,6 +817,7 @@ void NotesActivity::loop() {
         return;
       }
       library_.remove(openName_);
+      asleepDeleted(openName_);
       openDeck();
       return;
     case notesui::ActionDismiss:
@@ -745,6 +865,7 @@ void NotesActivity::render(RenderLock&&) {
       model.menuIcon = &icon_go_settings_32;
       model.anyDone = anyDone();
       model.isList = !openIsPage();
+      model.shownAsleep = isShownAsleep();
       notesui::buildMenu(screen, model);
       break;
     }

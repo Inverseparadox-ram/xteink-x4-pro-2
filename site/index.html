@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CrossPlay</title>
-<meta name="description" content="A fork of CrossPoint for the Xteink X4 Pro and the Seeed reTerminal Sticky. Games, flashcards and comics built for a screen whose talent is holding still, and two devices that find each other with nothing to configure.">
+<meta name="description" content="A fork of CrossPoint for the Xteink X4 Pro, Seeed reTerminal Sticky, and M5Stack PaperMono / Lite. Games, flashcards and comics built for a screen whose talent is holding still, and two devices that find each other with nothing to configure.">
 <meta property="og:title" content="CrossPlay">
-<meta property="og:description" content="Everything else a still screen is good at. A fork of CrossPoint for the Xteink X4 Pro and the Seeed reTerminal Sticky.">
+<meta property="og:description" content="Everything else a still screen is good at. A fork of CrossPoint for the Xteink X4 Pro, Seeed reTerminal Sticky, and M5Stack PaperMono / Lite.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://crossplay.ma-r-s.com/">
 <!-- Absolute, or no unfurler resolves it. Stamped by site/set-host.py; the
@@ -73,6 +73,7 @@
     <a href="#nearby">Play nearby</a>
     <a href="/study/">Anki decks</a>
     <a href="/wikipedia/">Wikipedia</a>
+    <a href="/live/">Live</a>
     <a href="#get">Install</a>
     <a class="topnav-out" href="https://github.com/ma-r-s/crossplay">
       <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" width="15" height="15">
@@ -86,11 +87,11 @@
 <header class="hero wrap" id="top">
   <div class="hero-grid">
     <div class="hero-text">
-      <p class="eyebrow">Xteink X4 Pro <span class="eyebrow-sep">&middot;</span> Seeed reTerminal Sticky</p>
+      <p class="eyebrow">Xteink X4 Pro <span class="eyebrow-sep">&middot;</span> Seeed reTerminal Sticky <span class="eyebrow-sep">&middot;</span> M5Stack PaperMono / Lite</p>
       <h1>E-ink is good at waiting.</h1>
       <p class="lede">
         So is a chess position, a flashcard, a puzzle you are halfway through.
-        The Xteink X4 Pro and the Seeed reTerminal Sticky are cheap e-ink
+        The Xteink X4 Pro, Seeed reTerminal Sticky, and M5Stack PaperMono / Lite are e-ink
         devices, and <a href="https://crosspointreader.com/">CrossPoint</a>
         already makes them good at reading. CrossPlay is firmware that adds
         everything else, and lets two of them find each other with nothing to
@@ -267,6 +268,27 @@
       <span class="tag">Game &middot; plays nearby</span>
       <h3>Go</h3>
       <p>Nine by nine, which is the size that finishes on one train journey, or thirteen by thirteen when you have longer. A stone is aimed before it is placed, so the board can warn you before you fill your own eye. Two passes and it counts for you, and you settle which stones are dead by tapping them.</p>
+    </article>
+
+    <article class="card">
+      <div class="shot-wrap"><img class="shot" src="assets/shots/hex.png" width="480" height="800" loading="lazy" decoding="async" alt="A game of Hex part way through: an eleven-by-eleven rhombus of hexagons filling the panel corner to corner, its top and bottom edges banded in solid black and its left and right edges outlined. Four black stones run down the middle in a short chain and three white ones cut across them, the last move ringed. In the notch above the board an outlined card reads THEM and LEFT TO RIGHT; in the notch below, a filled black card reads YOU and TOP TO BOTTOM because it is that side&#39;s turn."></div>
+      <span class="tag">Game &middot; plays nearby</span>
+      <h3>Hex</h3>
+      <p>Put a stone on any empty cell. Join your two edges before your opponent joins theirs. Nothing is ever captured and nothing ever moves, there are no draws at all, and the rules are that sentence -- against the device at three strengths, across the table, or against someone next to you.</p>
+    </article>
+
+    <article class="card">
+      <div class="shot-wrap"><img class="shot" src="assets/shots/underhand.png" width="480" height="800" loading="lazy" decoding="async" alt="An Underhand card under a black UNDERHAND band that reads DECK 10: the card ORGAN HARVEST and its line, The most important organ is the organization. Three option boxes follow. We need the cash and We&rsquo;ve got the meats each offer three ways to pay joined by OR, the first filled black: one prisoner, one cultist or one relic, with what the option gives at the right, two money and a prisoner, or two food and a prisoner. The third, Save the slaughter for another day, costs nothing. A small question mark sits above the right end of the bar, which runs along the bottom: six symbols with counts, a gem 1, coins 3, a person 2, wheat 4, a locked person 2, an eye 2."></div>
+      <span class="tag">Game</span>
+      <h3>Underhand</h3>
+      <p>The cult card game from 2017, every card of it, with no art and nothing animated. Each card asks something of your cult, paid in relics, money, cultists, food, prisoners or suspicion. Keep the police and the gods&rsquo; wrath off your back long enough for a chain of cards to end with a god answering.</p>
+    </article>
+
+    <article class="card">
+      <div class="shot-wrap"><img class="shot" src="assets/shots/wordle.png" width="480" height="800" loading="lazy" decoding="async" alt="A Wordle from the archive, two guesses in, under a black WORDLE band dated SEP 8. CRANE has C, R and A on dithered grey squares and N and E in heavy outlines with a dot in the corner. AISLE has A and S grey, I solid black with a white letter, and L and E outlined with a dot. Four empty rows follow, then a QWERTY keyboard whose keys carry the same marks, a greyed tick key at the bottom left and a backspace key at the bottom right."></div>
+      <span class="tag">Game</span>
+      <h3>Wordle</h3>
+      <p>Six guesses for the day&rsquo;s word, the same word as the New York Times&rsquo; that day. One download holds every past day, so the archive goes back to the first one.</p>
     </article>
 
     <article class="card">
@@ -540,7 +562,9 @@
           <legend>Which device</legend>
           <label><input type="radio" name="install-device" value="x4pro" checked> Xteink X4 Pro</label>
           <label><input type="radio" name="install-device" value="sticky"> Seeed reTerminal Sticky</label>
+          <label><input type="radio" name="install-device" value="papermono"> M5Stack PaperMono / Lite</label>
         </fieldset>
+        <p class="installer-fine">PaperMono / Lite: hold the power button for about two seconds until the red LED flashes, then release it to enter download mode.</p>
         <button class="btn primary" type="button" id="installButton">Install on Xteink X4 Pro</button>
         <div class="installer-bar" id="installBar" hidden><span id="installBarFill"></span></div>
         <p class="installer-status" id="installStatus" role="status" aria-live="polite"></p>
@@ -556,7 +580,7 @@
       <details class="by-hand">
         <summary>What it changes</summary>
         <ul class="steps">
-          <li>Only the <strong>Xteink X4 Pro</strong> and the <strong>Seeed reTerminal Sticky</strong>. For any other device, <a href="https://crosspointreader.com/">CrossPoint</a> upstream is the right answer.</li>
+          <li>Only the <strong>Xteink X4 Pro</strong>, the <strong>Seeed reTerminal Sticky</strong> and the <strong>M5Stack PaperMono / Lite</strong>. For any other device, <a href="https://crosspointreader.com/">CrossPoint</a> upstream is the right answer.</li>
           <li>After this, no more cables: <strong>Settings &rarr; Check for updates</strong> does the rest over Wi-Fi.</li>
           <li>Flashing stock CrossPoint over the top returns the device exactly to where it was.</li>
         </ul>
@@ -565,12 +589,17 @@
       <details class="by-hand">
         <summary>Or install it by hand</summary>
         <ol class="steps">
-          <li><strong>Download your device's full image</strong> from the <a href="https://github.com/ma-r-s/crossplay/releases">releases page</a>: <code>crossplay-&lt;version&gt;-x4pro-full.bin</code> or <code>crossplay-&lt;version&gt;-sticky-full.bin</code>. Each is the whole firmware, bootloader and partition table included, so you do not need to have installed CrossPoint first. The firmware refuses an image built for the other board, so the worst a mixed-up download costs is a retry.</li>
-          <li><strong>Flash it over USB.</strong> You need <a href="https://github.com/espressif/esptool">esptool</a>, which is one <code>pip install esptool</code> on Windows, macOS or Linux alike. With the device plugged in (shown for the X4 Pro; swap in the sticky filename on a Sticky):
+          <li><strong>Download your device's full image</strong> from the <a href="https://github.com/ma-r-s/crossplay/releases">releases page</a>: <code>crossplay-&lt;version&gt;-x4pro-full.bin</code>, <code>crossplay-&lt;version&gt;-sticky-full.bin</code> or <code>crossplay-&lt;version&gt;-papermono-full.bin</code>. Each is the whole firmware, bootloader and partition table included, so you do not need to have installed CrossPoint first. The firmware refuses an image built for the other board, so the worst a mixed-up download costs is a retry.</li>
+          <li><strong>Flash it over USB.</strong> You need <a href="https://github.com/espressif/esptool">esptool</a>, which is one <code>pip install esptool</code> on Windows, macOS or Linux alike. With the device plugged in (shown for the X4 Pro; use your device’s filename):
             <br><code>esptool.py --chip esp32s3 --baud 921600 write_flash 0x0 crossplay-&lt;version&gt;-x4pro-full.bin</code>
           </li>
-          <li><strong>Updating an install you already have</strong> uses the app-only file instead -- <code>firmware.bin</code> for the X4 Pro, <code>firmware-sticky.bin</code> for the Sticky -- over Wi-Fi or from the SD card. The <code>-full.bin</code> is for USB only: handing it to the updater writes a bootloader into a slot meant for the application.</li>
+          <li><strong>Updating an install you already have</strong> uses the app-only file instead -- <code>firmware.bin</code> for the X4 Pro, <code>firmware-sticky.bin</code> for the Sticky, <code>firmware-papermono.bin</code> for PaperMono / Lite -- over Wi-Fi or from the SD card. The <code>-full.bin</code> is for USB only: handing it to the updater writes a bootloader into a slot meant for the application.</li>
         </ol>
+      </details>
+
+      <details class="locked">
+        <summary>Got a locked device?</summary>
+        <p>Some X4 Pros from third-party stores refuse USB flashing, so the picker above never shows them. Install stock CrossPoint with the <a href="https://crosspointreader.com/unlocker">Xteink Unlocker</a>, copy CrossPlay's <code>firmware.bin</code> to the root of the SD card, then <strong>Settings &rarr; System &rarr; SD Card Firmware Update</strong>. <a href="https://github.com/ma-r-s/crossplay/blob/xteink/docs/install.md#a-usb-locked-x4-pro">The details, and what each refusal means.</a></p>
       </details>
 
       <div class="cta-row">
@@ -607,7 +636,7 @@
     <div class="foot-grid">
       <div>
         <h4>CrossPlay</h4>
-        <p class="foot-note">A fork of CrossPoint for the Xteink X4 Pro and the Seeed reTerminal Sticky. Built by one person, in the open. MIT licensed, like the project it forks.</p>
+        <p class="foot-note">A fork of CrossPoint for the Xteink X4 Pro, Seeed reTerminal Sticky, and M5Stack PaperMono / Lite. Built by one person, in the open. MIT licensed, like the project it forks.</p>
       </div>
       <div>
         <h4>Project</h4>
@@ -638,6 +667,7 @@
       <h4>Credits</h4>
       <div class="foot-fine-cols">
         <p>xkcd comics by Randall Munroe, <a href="https://xkcd.com/license.html">CC BY-NC 2.5</a>, fetched by the device from <a href="https://xkcd.com">xkcd.com</a>. Connections puzzles are the New York Times'; CrossPlay ships none of them and fetches the archive, when you ask it to, from the community mirror at <a href="https://github.com/Eyefyre/NYT-Connections-Answers">Eyefyre/NYT-Connections-Answers</a>.</p>
+        <p>Wordle&rsquo;s answers and accepted guesses are the New York Times&rsquo; too; CrossPlay ships none of them and fetches them, when you ask, from <a href="https://github.com/mfilej/wrdl">mfilej/wrdl</a> and, for the newest days, from the Times&rsquo; own daily answer.</p>
         <p>Hacker News comes from the public <a href="https://hn.algolia.com/api">Algolia API</a>, and opening an article sends its URL through <a href="https://r.jina.ai">r.jina.ai</a> to get readable text back, which means that third party learns what you are reading.</p>
         <p>Reading positions sync to CrossPoint's own server by default, which is upstream's infrastructure rather than ours. The address is a setting and can be pointed anywhere that speaks KOSync.</p>
         <p>CrossPlay's own services are told an anonymous device id, the version and board it is running, and any crash it just recovered from. Nothing else calls home, and <strong>Settings &rarr; System</strong> turns it off.</p>

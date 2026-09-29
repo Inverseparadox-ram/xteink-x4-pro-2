@@ -17,6 +17,7 @@ import json
 import os
 import pathlib
 import secrets
+import shutil
 import struct
 import tempfile
 import time
@@ -179,6 +180,104 @@ def next_after(schedule: dict, anchor: int, now: int) -> int:
     return anchor + int(schedule.get("interval_s", DEFAULT_INTERVAL_S))
 
 
+# THE READER'S BATTERY, as it reported it on each check-in.
+#
+# It rides the pull the reader already makes, as one header, so knowing it
+# costs the reader no wake, no request and no radio time it was not already
+# spending. Everything below is therefore only as fresh as the last check-in,
+# and the page says when that was rather than presenting the figure as now.
+#
+# THIRTY DAYS, one line per check-in, in a log of its own beside state.json.
+# At the fastest schedule that is 2880 lines; keeping them in state.json would
+# rewrite and re-parse the whole record on every request the page makes.
+BATTERY_KEEP_S = 30 * 86400
+# The log is appended to and only rewritten once it passes this, so a check-in
+# costs one short append rather than a rewrite of a month of readings.
+BATTERY_LOG_TRIM_BYTES = 64 * 1024
+# A CHARGE is a reading this far above the lowest one since the last charge.
+#
+# Against the running low, not the neighbouring reading: a charge seen in small
+# steps (somebody pressing Check now while it sits on the cable) still adds up
+# to one. And fifteen, not three: the X4 and PaperMono estimate charge from
+# voltage in steps of ten, so a reading that wobbles across a boundary (60, 70,
+# 60) is one step of noise, not somebody plugging it in.
+BATTERY_CHARGE_RISE = 15
+# How much discharge it takes before "about how long is left" is worth saying.
+# Two days of readings and three points of drop: fewer and the slope is the
+# gauge's rounding, not the reader's consumption.
+BATTERY_ESTIMATE_MIN_S = 2 * 86400
+BATTERY_ESTIMATE_MIN_DROP = 3
+
+
+def parse_battery(raw: str) -> int | None:
+    """The reader's X-Battery header as a whole percent, or None.
+
+    None for anything that is not a plain ASCII 0..100: an absent header is a
+    reader that could not read its gauge, and it must stay absent rather than
+    become a 0% that sends somebody to find a charger for a full battery.
+    ASCII because str.isdigit() also says yes to superscript digits, which
+    int() then refuses.
+    """
+    raw = (raw or "").strip()
+    if not raw.isascii() or not raw.isdigit() or len(raw) > 3:
+        return None
+    value = int(raw)
+    return value if 0 <= value <= 100 else None
+
+
+def battery_outlook(points: list[tuple[int, int]], now: int) -> dict:
+    """When the reader was last charged and roughly how long it has left.
+
+    `points` are (epoch, percent), oldest first. Returns a dict with
+    `charged_at` (the reading at which the most recent charge showed) and
+    `days_left`, each present only when the readings can support it. An absent
+    key is "cannot tell", which the page says nothing about; a guess would be a
+    number somebody plans a trip to the fridge around.
+
+    `days_left` IS COUNTED FROM NOW, not from the last reading. A reader that
+    went quiet at 8% with two days left has less than that a week later, and
+    the figure must not stand still while the reader does. It is 0 when the
+    projection has already run out, which the page says as such.
+    """
+    out: dict = {}
+    if not points:
+        return out
+    start, low = 0, points[0][1]
+    for i in range(1, len(points)):
+        p = points[i][1]
+        if p - low >= BATTERY_CHARGE_RISE:
+            start, low = i, p
+        else:
+            low = min(low, p)
+    if start > 0:
+        out["charged_at"] = points[start][0]
+    run = points[start:]
+    # From the LAST reading at the top, so a day spent at 100% on the cable is
+    # not averaged in as a battery that does not drain.
+    top = max(p for _, p in run)
+    run = run[max(i for i, (_, p) in enumerate(run) if p == top):]
+    span = run[-1][0] - run[0][0]
+    drop = run[0][1] - run[-1][1]
+    if span < BATTERY_ESTIMATE_MIN_S or drop < BATTERY_ESTIMATE_MIN_DROP:
+        return out
+    # Least squares over the whole discharge, not first-to-last: the gauge
+    # steps in whole percent, and two endpoints can each sit a step either side
+    # of the truth.
+    n = len(run)
+    mt = sum(t for t, _ in run) / n
+    mp = sum(p for _, p in run) / n
+    var = sum((t - mt) ** 2 for t, _ in run)
+    if var <= 0:
+        return out
+    slope = sum((t - mt) * (p - mp) for t, p in run) / var
+    if slope >= 0:
+        return out
+    last_t, last_p = run[-1]
+    left_s = last_p / -slope - max(0, now - last_t)
+    out["days_left"] = round(max(0.0, left_s) / 86400, 1)
+    return out
+
+
 def data_root() -> pathlib.Path:
     return pathlib.Path(os.environ.get("FRIDGE_DATA", "/data"))
 
@@ -211,8 +310,14 @@ def _atomic_write(path: pathlib.Path, payload: bytes) -> None:
 # 46px tile. Generated here, from the picture the reader is actually sent, the
 # tile cannot disagree with what is on the glass -- and no image library is
 # added to a service whose whole point is that it has no compiled dependencies.
-THUMB_W = 60
-THUMB_H = 100
+# THE PANEL'S OWN SIZE. 60x100 was a SEVEN-TIMES upscale by the time a phone
+# drew a rail tile: 152 CSS pixels is 456 real ones at 3x, and a browser
+# cannot invent what is not there. The source is exactly 480x800, so serving
+# that means every tile is downscaled and never stretched, at any density.
+# It also costs nothing worth counting: the full image beside it is 96KB, and
+# a four-level PNG of the same pixels is a fraction of that.
+THUMB_W = 480
+THUMB_H = 800
 
 
 def _bmp_levels(payload: bytes) -> list[list[int]] | None:
@@ -277,7 +382,8 @@ def _png_grey(width: int, height: int, rows: list[bytes]) -> bytes:
 
 
 def thumbnail(payload: bytes) -> bytes | None:
-    """A 60x100 greyscale PNG of a reader picture, or None if it cannot be read.
+    """A THUMB_W x THUMB_H greyscale PNG of a reader picture, or None if it
+    cannot be read.
 
     Box-averaged rather than sampled: a 480x800 line drawing point-sampled to a
     tenth of its size loses most of its strokes, and a rail of tiles that are
@@ -323,6 +429,36 @@ class Fridge:
     def thumb_path(self, sha: str) -> pathlib.Path:
         return self.root / "thumbs" / f"{sha}.png"
 
+    @property
+    def battery_path(self) -> pathlib.Path:
+        return self.root / "battery.log"
+
+    def battery_log(self, now: int | None = None) -> list[tuple[int, int]]:
+        """The last BATTERY_KEEP_S of readings, oldest first."""
+        now = int(time.time()) if now is None else now
+        try:
+            lines = self.battery_path.read_text().splitlines()
+        except OSError:
+            return []
+        points = []
+        for line in lines:
+            parts = line.split()
+            if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+                continue
+            t, p = int(parts[0]), int(parts[1])
+            if now - t <= BATTERY_KEEP_S and 0 <= p <= 100:
+                points.append((t, p))
+        points.sort(key=lambda p: p[0])  # arrival order within one second
+        return points
+
+    def _record_battery(self, now: int, percent: int) -> None:
+        self.battery_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.battery_path, "a") as f:
+            f.write(f"{now} {percent}\n")
+        if self.battery_path.stat().st_size > BATTERY_LOG_TRIM_BYTES:
+            kept = "".join(f"{t} {p}\n" for t, p in self.battery_log(now))
+            _atomic_write(self.battery_path, kept.encode())
+
     def exists(self) -> bool:
         return self.state_path.exists()
 
@@ -337,15 +473,22 @@ class Fridge:
 
     def create(self, device_token_hash: str) -> dict:
         state = {
-            # WHEN THE READER WAS SYNCED, and the anchor the first countdown is
-            # measured from. A fridge is made by /api/pair/start, which is the
-            # reader showing its code, so this is within a minute of the moment
-            # somebody finished pairing -- and a reader that pairs again gets a
-            # NEW fridge with a new stamp, so re-pairing re-anchors by
-            # construction rather than by a migration.
+            # WHEN THE PAIRING WAS CLAIMED, and the anchor the first countdown
+            # is measured from. A fridge is made by /api/claim, so this is the
+            # moment somebody actually typed the code -- and a reader that
+            # pairs again gets a NEW fridge with a new stamp, so re-pairing
+            # re-anchors by construction rather than by a migration.
             "created": int(time.time()),
             "device_token_hash": device_token_hash,
             "last_checkin": 0,
+            # HOW MANY TIMES THE READER HAS COME BACK, and when it first did.
+            # last_checkin alone is a pure overwrite, so it can only answer
+            # "ever" or "never" -- and "ever" counts a reader that pulled once
+            # during setup the same as one that has been on a fridge for a
+            # month. The second check-in is the first evidence that anybody
+            # kept it, so it has to be countable.
+            "checkins": 0,
+            "first_checkin": 0,
             # WHAT THE READER SAID ITS OWN ALARM IS, converted to this clock
             # when it said it. 0 until it has spoken once.
             "next_wake": 0,
@@ -483,9 +626,11 @@ class Fridge:
         except OSError:
             return None
 
-    def touch_checkin(self, wake_in: int, live_on: bool) -> None:
+    def touch_checkin(self, wake_in: int, live_on: bool, battery: int | None = None) -> int:
         """The reader spoke, was handed `wake_in` seconds, and has picked the
-        current schedule up.
+        current schedule up. Returns which check-in this was: 1 the first
+        time, 2 the second, and so on.
+
 
         `wake_in` is SECONDS FROM NOW, converted here to this service's clock.
         Never an absolute time from the reader: its only clock comes from
@@ -497,16 +642,36 @@ class Fridge:
         makes it adopt the reply's figure, so the moment we answer, the schedule
         it is asleep on IS the schedule we just used. Nothing pending survives a
         check-in, by construction rather than by a second write somewhere else.
+
+        The check-in counter costs no extra write: this method already saves. A
+        fridge made before the counter existed has no `checkins` key and starts
+        from whatever it can prove -- 1 if it has ever checked in, 0 if not --
+        so an old record reads as "at least this many" rather than as zero.
+
+        `battery` is the reader's own percent from X-Battery, or None when it
+        sent none. None leaves the last reading standing, with its own time
+        beside it, rather than replacing a real figure with a missing one.
         """
         now = int(time.time())
         state = self.load()
+        if "checkins" not in state:
+            state["checkins"] = 1 if state.get("last_checkin") else 0
+        state["checkins"] = int(state.get("checkins") or 0) + 1
+        if not state.get("first_checkin"):
+            state["first_checkin"] = state.get("last_checkin") or now
         state["last_checkin"] = now
         state["live_on"] = bool(live_on)
         state["next_wake"] = now + int(wake_in) if live_on and wake_in > 0 else 0
         state["armed"] = dict(
             state.get("schedule") or DEFAULT_SCHEDULE,
         )
+        if battery is not None:
+            state["battery"] = int(battery)
+            state["battery_at"] = now
         self.save(state)
+        if battery is not None:
+            self._record_battery(now, int(battery))
+        return int(state["checkins"])
 
     def set_live(self, on: bool) -> None:
         """The reader saying Live was switched off on it.
@@ -619,6 +784,52 @@ def index_token(token: str, fridge_id: str) -> None:
     index = _load_index()
     index[_hash(token)] = fridge_id
     _atomic_write(_index_path(), json.dumps(index).encode())
+
+
+def sweep_orphans(older_than_s: int = 3600) -> int:
+    """Delete fridges nobody ever claimed. Returns how many went.
+
+    Repairs the records the old pairing flow left behind: until 2026-09-21 a
+    fridge was written when the reader SHOWED a code, so every visit to the
+    Live setup screen made one and nothing ever removed it. Nineteen hours of
+    one person testing left 67, which is why "how many fridges" was not a
+    number anybody could use.
+
+    The new flow cannot make one, so this only ever has old records to find.
+    It stays because the repair has to run on the deployed data, not only in
+    the code: a rule that is right for new writes and leaves the old ones
+    wrong still shows the wrong number.
+
+    An orphan is a fridge with NO SENDER and NO CHECK-IN that is older than
+    `older_than_s`. A claimed fridge gets its first sender in the same request
+    that creates it, so nothing live can match. The age bound is belt and
+    braces against a claim caught mid-flight.
+    """
+    root = data_root() / "fridges"
+    if not root.is_dir():
+        return 0
+    now = int(time.time())
+    index = _load_index()
+    gone, changed = 0, False
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            continue
+        try:
+            state = json.loads((d / "state.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if state.get("senders") or state.get("last_checkin") or state.get("checkins"):
+            continue
+        if now - int(state.get("created", 0)) < older_than_s:
+            continue
+        for h in [k for k, v in index.items() if v == d.name]:
+            del index[h]
+            changed = True
+        shutil.rmtree(d, ignore_errors=True)
+        gone += 1
+    if changed:
+        _atomic_write(_index_path(), json.dumps(index).encode())
+    return gone
 
 
 def add_sender(fridge: "Fridge", token: str, name: str) -> bool:

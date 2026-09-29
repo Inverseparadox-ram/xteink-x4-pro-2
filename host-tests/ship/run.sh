@@ -180,7 +180,7 @@ fi
 #
 # Offset-then-file pairs rather than one literal line, so reformatting does
 # not fail a correct script and reordering does not pass a broken one.
-for board in x4pro sticky; do
+for board in x4pro sticky papermono; do
   merge="$(printf '%s' "$CODE" | tr '\n' ' ' | grep -o "merge-bin[^;]*gh_release_$board/firmware\.bin" || true)"
   if [ -z "$merge" ]; then
     bad "ship.sh never calls esptool merge-bin for $board"
@@ -373,6 +373,22 @@ else
   echo "FAIL ship  ship.sh writes the release notes at line $NOTES_LINE and squashes at line $LAND_LINE. Before the squash the pull request is not merged, release_notes.py maps nothing to it, every note line becomes a raw commit subject and the release:minor label is never seen -- so every release silently becomes a patch bump."
 fi
 
+# -- 3g2. the provisional notes treat the branch as ONE landing -------------
+#
+# The call handed --pr-json runs on the unmerged branch. Without --squash-onto
+# release_notes.py walks that branch's own first-parent line: every commit a
+# bullet, every trunk merge a bullet named after work an earlier release
+# shipped. v1.13.25's first run drafted fourteen lines for one pull request
+# and failed its own gate on length. host-tests/autorelease proves what the
+# flag does; this proves ship.sh still passes it.
+checks=$((checks + 1))
+if printf '%s' "$CODE" | grep -E 'release_notes\.py[^|]*--pr-json' | grep -q -- '--squash-onto origin/xteink'; then
+  ok
+else
+  failed=$((failed + 1))
+  echo "FAIL ship  the provisional notes call no longer passes --squash-onto origin/xteink, so a branch that merged trunk drafts a bullet per commit and names already-released work"
+fi
+
 # -- 3h. the notes must name THIS release -----------------------------------
 #
 # release_notes.py returns early without writing when every commit since the
@@ -563,8 +579,9 @@ fi
 checks=$((checks + 1))
 # The COMPARISON, not the variables: both names appear in the die message
 # that reports a mismatch, so grepping for them passed with the comparison
-# deleted.
-if printf '%s' "$CODE" | grep -qE '\[ "\$BRANCH_TREE" != "\$TRUNK_TREE" \]'; then
+# deleted. It is a diff of everything but the site's emulator files now (check
+# 6 runs it); this asserts the diff is what decides.
+if printf '%s' "$CODE" | grep -qE '\[ -n "\$DIFFERS" \]'; then
   ok
 else
   failed=$((failed + 1))
@@ -592,7 +609,20 @@ fi
 # is present and unreachable reads exactly like a guard that works. Both cases
 # are driven in a scratch clone so nothing here can touch a real branch, and
 # --dry-run is deliberately NOT used: the refusals must fire before it.
-SCRATCH="$(mktemp -d -t ship-suite)"
+# PORTABLE FORM, with the X's spelled out. `mktemp -d -t ship-suite` is BSD
+# syntax: macOS appends a suffix, GNU coreutils reads the argument as the
+# TEMPLATE and refuses it for having no trailing X's. On Linux it therefore
+# printed nothing and exited non-zero, SCRATCH was empty, the scratch repo was
+# never created, and the two refusal checks below ran ship.sh in the REAL
+# checkout -- which actions/checkout leaves on a detached HEAD, so ship.sh's
+# first guard refused that instead and both checks blamed the guard they were
+# testing. Green on every Mac, red on every runner.
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/ship-suite.XXXXXXXX")"
+[ -n "$SCRATCH" ] && [ -d "$SCRATCH" ] || {
+  echo "FAIL ship  mktemp produced no scratch directory; the live refusal checks cannot run"
+  echo "1 checks, 1 failed"
+  exit 1
+}
 trap 'rm -rf "$SCRATCH"' EXIT
 if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   q() { "$@" >/dev/null 2>&1; }
@@ -604,6 +634,24 @@ if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   q git -C "$SCRATCH/repo" add -A
   q git -C "$SCRATCH/repo" commit -q -m init
 
+  # THE SETUP IS ASSERTED, NOT ASSUMED.
+  #
+  # Every git call above is silenced by q(), so a setup that failed produced a
+  # scratch repo on a detached HEAD -- and ship.sh's FIRST guard refuses a
+  # detached HEAD. Both refusal checks below then failed, blaming the guard
+  # each was testing, in a run whose real fault was three lines earlier. That
+  # cost a nightly and two wrong diagnoses on 2026-09-22.
+  setup_branch="$(git -C "$SCRATCH/repo" branch --show-current)"
+  checks=$((checks + 1))
+  if [ "$setup_branch" != "app/scratch" ]; then
+    failed=$((failed + 1))
+    echo "FAIL ship  the scratch repo is on [$setup_branch], not app/scratch, so the refusal checks below test nothing they claim to"
+    echo "     SCRATCH=[$SCRATCH] dir=$([ -d "$SCRATCH/repo" ] && echo present || echo MISSING) git-dir=$([ -d "$SCRATCH/repo/.git" ] && echo present || echo MISSING)"
+    echo "     ship.sh copied: $([ -x "$SCRATCH/repo/scripts_local/ship.sh" ] && echo yes || echo NO)"
+    echo "     git version: $(git --version)"
+    git -C "$SCRATCH/repo" status --short 2>&1 | head -3 | sed "s/^/       /"
+  fi
+
   # dirty tree
   echo dirt > "$SCRATCH/repo/dirt.txt"
   out="$(cd "$SCRATCH/repo" && ./scripts_local/ship.sh --dry-run 2>&1)"; rc=$?
@@ -613,6 +661,8 @@ if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   else
     failed=$((failed + 1))
     echo "FAIL ship  ship.sh did not refuse a dirty working tree (exit $rc). An uncommitted file is not in the commit the gate verified, so the images would not be the ones this tree describes"
+    echo "     it was on branch [$(git -C "$SCRATCH/repo" branch --show-current)] and said:"
+    printf '%s\n' "$out" | sed 's/^/       /'
   fi
   rm -f "$SCRATCH/repo/dirt.txt"
 
@@ -625,9 +675,65 @@ if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   else
     failed=$((failed + 1))
     echo "FAIL ship  ship.sh did not refuse being run on xteink itself (exit $rc)"
+    echo "     it was on branch [$(git -C "$SCRATCH/repo" branch --show-current)] and said:"
+    printf '%s\n' "$out" | sed 's/^/       /'
   fi
 else
   skip "not a git checkout; the live refusal checks need one"
+fi
+
+# 6. THE EMULATOR BOT'S COMMIT IS NOT A DIFFERENT FIRMWARE. crossplay-emulator.yml
+#    commits site/emulator-manifest.json to xteink about fifteen minutes after a
+#    merge of app code, inside the next release's gate. On 2026-09-28 three
+#    releases in a row landed their squash and then refused over that one file.
+#    Run the land step's OWN comparison, extracted from ship.sh, in a scratch
+#    repository: a trunk that differs only in the manifest must pass, and one
+#    that differs anywhere else must still stop the release.
+DIFF_LINE="$(grep -E '^[[:space:]]*DIFFERS="\$\(git diff' "$SHIP" | head -1)"
+if [ -z "$DIFF_LINE" ]; then
+  bad "ship.sh's land step no longer computes DIFFERS with git diff, so the emulator-manifest check below has nothing to run"
+else
+  EMU="$(mktemp -d "${TMPDIR:-/tmp}/ship-emu.XXXXXX")"
+  (
+    cd "$EMU" && git init -q && git config user.email t@t && git config user.name t
+    mkdir -p src site/emulator && echo a > src/app.cpp && echo '{}' > site/emulator-manifest.json
+    git add -A && git commit -qm base
+  )
+  BRANCH_HEAD="$(git -C "$EMU" rev-parse HEAD)"
+  ( cd "$EMU" && echo '{"v":2}' > site/emulator-manifest.json && echo x > site/emulator/app.wasm && git add -A && git commit -qm emu )
+  EMU_ONLY="$(git -C "$EMU" rev-parse HEAD)"
+  ( cd "$EMU" && echo b > src/app.cpp && git commit -qam code )
+  CODE_TOO="$(git -C "$EMU" rev-parse HEAD)"
+  run_diff() { ( cd "$EMU" && BRANCH_HEAD="$1" TRUNK_NEW="$2" && eval "$DIFF_LINE" && printf '%s' "$DIFFERS" ); }
+  if [ -z "$(run_diff "$BRANCH_HEAD" "$EMU_ONLY")" ]; then
+    ok
+  else
+    bad "a trunk that differs from the gated branch ONLY in site/emulator-manifest.json still stops the release"
+  fi
+  if [ -n "$(run_diff "$BRANCH_HEAD" "$CODE_TOO")" ]; then
+    ok
+  else
+    bad "a trunk that differs from the gated branch in src/ no longer stops the release: the emulator exclusion swallowed real code"
+  fi
+  rm -rf "$EMU"
+fi
+guard_refuses "different-tree" "the squash landed a different tree"
+guard_refuses "moved-before-merge" "xteink moved during the gate"
+
+# -- the moved-trunk stop comes BEFORE the merge --------------------------------
+#
+# Notices n30 and n31: checked only after `gh pr merge`, a trunk that moved
+# during the gate left a MERGED pull request that no re-run could finish (a
+# re-run needs an open one), three times on 2026-09-28. The guard existing is
+# not enough: after the merge it fires too late. So its line must come first.
+checks=$((checks + 1))
+MOVED_AT="$(printf '%s\n' "$CODE" | grep -n 'xteink moved during the gate' | head -1 | cut -d: -f1)"
+MERGE_AT="$(printf '%s\n' "$CODE" | grep -n 'gh pr merge' | grep -v 'would:' | head -1 | cut -d: -f1)"
+if [ -n "$MOVED_AT" ] && [ -n "$MERGE_AT" ] && [ "$MOVED_AT" -lt "$MERGE_AT" ]; then
+  ok
+else
+  failed=$((failed + 1))
+  echo "FAIL ship  the moved-trunk stop (line ${MOVED_AT:-none}) does not come before the merge (line ${MERGE_AT:-none}): after the squash it can only leave a merged pull request nothing can release"
 fi
 
 echo "$checks checks, $failed failed"

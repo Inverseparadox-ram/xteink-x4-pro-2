@@ -21,6 +21,44 @@ Everything above the marker is written by hand.
 
 <!-- releases, newest first -->
 
+### 1.13.27
+
+- Wordle: the daily word, in Connections' shape (#202)
+
+### 1.13.26
+
+- Underhand's menu says TUTORIAL while the tutorial is next, and that it comes back until you win it.
+
+### 1.13.25
+
+- Hex, the connection game: join your two edges before your opponent joins theirs. Against the device at three levels, across the table, or over PLAY NEARBY. On the Games shelf.
+
+### 1.13.24
+
+- Notes: put a note on the sleep screen (#198)
+
+### 1.13.23
+
+- Live: a brief wake re-sleeps with Live's alarm, not with none
+
+### 1.13.22
+
+- Underhand, the 2017 cult card game: summon a god before the cult falls. On the Games shelf, with a nine-page How to Play.
+
+### 1.13.21
+
+- M5Stack PaperMono / Lite support (carries #208)
+
+### 1.13.20
+
+- Notes: the phone page shows long items whole, and keeps a note a note
+- Notes: strike every line of a wrapped item, and never shrink a list
+
+### 1.13.19
+
+- Live: the reader's battery on the website, and thirty days of it behind a tap
+- Install: the route onto a USB-locked X4 Pro, and each SD refusal by its own name
+
 ### 1.13.18
 
 - Live: the board fits a phone, the history is shared, and a schedule can be a time of day

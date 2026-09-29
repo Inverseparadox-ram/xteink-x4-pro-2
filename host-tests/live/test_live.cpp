@@ -165,6 +165,14 @@ static void headerFor(uint8_t* out, const uint32_t declared) {
   out[5] = static_cast<uint8_t>((declared >> 24) & 0xff);
 }
 
+static void testBatteryHeader() {
+  checkStr(live::batteryHeader(73), "73", "a reading goes out as whole percent");
+  checkStr(live::batteryHeader(0), "0", "an empty battery is still a reading");
+  checkStr(live::batteryHeader(100), "100", "and so is a full one");
+  checkStr(live::batteryHeader(-1), "", "a gauge that did not answer sends nothing, never 0");
+  checkStr(live::batteryHeader(101), "", "nor a figure the service would refuse");
+}
+
 static void testImageCompleteness() {
   std::printf("image completeness\n");
   uint8_t h[6];
@@ -226,6 +234,44 @@ static live::Schedule paired(const int64_t last, const uint32_t interval, const 
   s.intervalSeconds = interval;
   s.consecutiveFailures = fails;
   return s;
+}
+
+// THE ALARM A BUMP OWES LIVE (card #620). The case is Mario's fridge exactly:
+// checked at 11:12 with 02:00 armed, woken for a moment at 12:06 by something
+// that did not hold the button, and put back down. It must go back down with
+// the REST of that alarm, never with none.
+static void testResleep() {
+  std::printf("a sleep that skips the Live check\n");
+  const int64_t checkedAt = 1790525551;  // Sun 27 Sep 11:12:31 Bogota
+  const uint32_t toTwoAm = 53249;        // what X-Next-Wake said then
+  const int64_t bumpedAt = checkedAt + 3258;
+
+  live::Schedule s = paired(checkedAt, toTwoAm, 0);
+  checkEq(live::resleepSeconds(s, bumpedAt), toTwoAm - 3258, "a bump keeps the rest of the alarm, to the second");
+  check(live::resleepSeconds(s, bumpedAt) > 0, "and never arms nothing while Live is on");
+
+  // Due already: nothing may fetch on these paths (no display, no fonts), so
+  // the check is handed to a timer wake a minute out, which runs it unattended.
+  checkEq(live::resleepSeconds(s, checkedAt + toTwoAm + 60), live::kDueResleepSeconds,
+          "a bump after the check was due hands it to a wake a minute out");
+  checkEq(live::resleepSeconds(paired(0, toTwoAm, 0), bumpedAt), live::kDueResleepSeconds,
+          "never asked: the same minute");
+
+  // Backoff survives a bump: the retry it was waiting for, not a fresh fetch.
+  live::Schedule failing = paired(bumpedAt - 300, toTwoAm, 2);
+  checkEq(live::resleepSeconds(failing, bumpedAt), live::retryDelaySeconds(2) - 300,
+          "in backoff, a bump keeps the retry it was waiting for");
+
+  // No clock: the RTC still counts, so arm the wait rather than nothing.
+  check(live::resleepSeconds(paired(checkedAt, toTwoAm, 2), 1000) > 0, "no clock and failing: still an alarm");
+
+  // Nothing to schedule is the one 0, and it is what the build's own timer is for.
+  live::Schedule off = s;
+  off.on = false;
+  checkEq(live::resleepSeconds(off, bumpedAt), 0, "Live off: no alarm of Live's");
+  live::Schedule unpaired = s;
+  unpaired.paired = false;
+  checkEq(live::resleepSeconds(unpaired, bumpedAt), 0, "not paired: no alarm of Live's");
 }
 
 static void testDecide() {
@@ -689,9 +735,11 @@ int main() {
   testClampInterval();
   testBackoff();
   testEtag();
+  testBatteryHeader();
   testImageCompleteness();
   testClock();
   testDecide();
+  testResleep();
   testShortDate();
   testNextCheckPhrase();
   testScheduleNote();

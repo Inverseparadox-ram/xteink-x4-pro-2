@@ -41,7 +41,7 @@ from fastapi import Cookie, FastAPI, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from . import store
+from . import events, store
 from .pairing import Pairings, token_hash
 from .ratelimit import Window
 
@@ -58,12 +58,31 @@ COOKIE_DOMAIN = ".ma-r-s.com"
 # -- and a list of origins is a list of sites allowed to draw on somebody's
 # reader. The reader is not a browser, sends no Origin and is unaffected by any
 # of this; only the page is.
+# THE SITE DEMANDS require-corp, so anything it loads from here must say it is
+# willing to be loaded cross-origin. Without this header every history
+# thumbnail is blocked by the browser and the rail draws broken-image icons --
+# which looks like the pictures were lost rather than like a header is missing.
+# CORS governs fetch(); this governs <img>. They are separate permissions and
+# passing one does not pass the other.
+@app.middleware("http")
+async def allow_cross_origin_embedding(request, call_next):
+    response = await call_next(request)
+    response.headers["cross-origin-resource-policy"] = "cross-origin"
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[SITE_ORIGIN],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["content-type"],
+    # EVERY header the page sends cross-origin. A custom header makes the request
+    # non-simple, so the browser preflights it, and one missing here fails that
+    # preflight with a 400 the browser reports as a network error -- which the
+    # page shows as "could not reach the service", naming the wrong cause
+    # entirely. x-kind arrived with the history rail and was never added here,
+    # so every send was refused while the service was healthy.
+    allow_headers=["content-type", "x-kind"],
     max_age=600,
 )
 
@@ -77,6 +96,27 @@ PULL_DEVICE = Window(30, 300)
 # The only other thing a reader posts, and it writes state.json every time.
 OFF_DEVICE = Window(10, 300)
 POST_SENDER = Window(60, 300)
+# Relaying a device's crash or install record, as the other two bridges do.
+# These bound the RELAY, not the requests: see device_reports below.
+REPORT_IP = Window(30, 300)
+GLOBAL_REPORT = Window(240, 60)
+
+# Live's word on the board's `events` table. Every Live event carries
+# props.fridge, a pseudonymous id for the fridge, and `device` ONLY when the
+# reader's own X-CrossPlay-Device header was on the request.
+#
+# Those are deliberately two different axes and are never added together. A
+# fridge is a setup somebody started; a device is a reader that exists. Using
+# the fridge id as `device` would have put every abandoned pairing into the
+# fleet's device count, which is the exact inflation this instrumentation was
+# added to expose.
+SERVICE = "live"
+
+
+def fridge_key(fridge_id: str) -> str:
+    """The id Live counts a fridge by: salted, hashed, not reversible to the
+    token or the directory name."""
+    return events.device_id(fridge_id)
 
 
 def client_ip(request: Request) -> str:
@@ -133,6 +173,53 @@ def _build() -> str:
         return "unknown"
 
 
+@app.middleware("http")
+async def device_reports(request: Request, call_next):
+    """Relay whatever crash or install record the reader is carrying.
+
+    Byte-for-byte the shape study-bridge and read-bridge use, and the three
+    details that matter are the same three:
+
+    AFTER the response and only on < 400, so a request the device will retry
+    does not post the same crash twice.
+
+    The limiter is consulted ONLY when there is something to relay. Charging
+    it per request instead once cost a real device its crash report in the
+    middle of a sync.
+
+    Until this existed a reader that used Live and nothing else could panic
+    every day and never be heard: Live was the one service that read none of
+    these headers, so its users' crashes reached nobody.
+    """
+    response = await call_next(request)
+    if response.status_code < 400:
+        client = events.client_for(request)
+        if client.crash is not None or client.ota is not None:
+            if REPORT_IP.allow(client_ip(request)) and GLOBAL_REPORT.allow("all"):
+                client.report(via=SERVICE)
+    return response
+
+
+@app.on_event("startup")
+def say_events() -> None:
+    if events.enabled():
+        log_line = "events on: pairings, check-ins and pictures post to the board"
+    else:
+        log_line = "events off: this service's numbers will not reach the board"
+    print(f"[live] {log_line}", flush=True)
+    # One pass over the records the old pairing flow left behind. Says the
+    # number rather than doing it quietly: the count IS the finding, and a
+    # deploy that silently deletes 67 directories should be readable in the
+    # log afterwards.
+    try:
+        gone = store.sweep_orphans()
+    except OSError as err:
+        print(f"[live] could not sweep unclaimed fridges: {err}", flush=True)
+        return
+    if gone:
+        print(f"[live] removed {gone} fridges nobody ever claimed", flush=True)
+
+
 @app.get("/healthz")
 def healthz() -> PlainTextResponse:
     return PlainTextResponse("ok " + _build())
@@ -147,19 +234,34 @@ def pair_start(request: Request) -> JSONResponse:
         return refused(
             "Too many attempts from this address. Try again in a few minutes."
         )
-    # The fridge and its device token are made HERE, not when somebody claims
-    # the code. The browser is handed its cookie the moment it claims, and a
-    # fridge that did not exist yet would make the page say it is not
-    # connected until the reader next spoke -- which for a sleeping reader is
-    # hours.
+    # The id and the token are MINTED here and the fridge is WRITTEN at the
+    # claim (see claim()). It used to be written here, and that is why the
+    # service held 67 fridges after nineteen hours of one person testing: the
+    # reader mints one every time the Live screen is opened on an unpaired
+    # device, again when a code expires on screen, and again on a 401. Nothing
+    # ever deleted the ones nobody claimed, so "fridges" counted visits to a
+    # setup screen.
+    #
+    # Nothing breaks by waiting. The reader does not receive its device token
+    # from this call -- it gets it from /api/pair/poll, which only answers once
+    # somebody has claimed -- so there is never a window where a token exists
+    # for a fridge that does not. An unclaimed code now leaves nothing behind
+    # at all: Pairings forgets it after CODE_TTL_S and that is the whole
+    # record.
     import secrets
 
     fridge_id = store.new_fridge_id()
     device_token = secrets.token_urlsafe(32)
-    fridge = store.Fridge(fridge_id)
-    fridge.create(token_hash(device_token))
-    store.index_token(device_token, fridge_id)
-    return JSONResponse(PAIRINGS.start(fridge_id, device_token))
+    started = PAIRINGS.start(fridge_id, device_token)
+    # A code was shown. Proof of curiosity and nothing more, which is why it
+    # is its own event rather than being counted as a fridge.
+    events.post(
+        SERVICE,
+        "pair-start",
+        device=events.client_for(request).device,
+        props={"fridge": fridge_key(fridge_id), "joining": False},
+    )
+    return JSONResponse(started)
 
 
 @app.post("/api/pair/join")
@@ -289,6 +391,7 @@ def pull(
     authorization: str = Header(default=""),
     if_none_match: str = Header(default="", alias="If-None-Match"),
     x_live_on: str = Header(default="", alias="X-Live-On"),
+    x_battery: str = Header(default="", alias="X-Battery"),
 ) -> Response:
     """The only request a sleeping reader ever makes.
 
@@ -300,6 +403,11 @@ def pull(
     learned the last time the reader spoke. When the NEXT check is does not
     need asking: it is the interval in this reply, stamped at the check-in and
     never recomputed. See store.next_expected.
+
+    AND ITS BATTERY, in X-Battery, a whole percent read before the radio came
+    up. The same reason as X-Live-On: nobody can ask a sleeping reader, and a
+    call of its own would double what a wake costs. Absent or unreadable is
+    stored as nothing, never as 0.
     """
     token = authorization.removeprefix("Bearer ").strip()
     fridge = store.fridge_for_device(token) if token else None
@@ -348,8 +456,31 @@ def pull(
     # What matters is that it is stamped ONCE, at the check-in, and never
     # recomputed: that is what stops a schedule change from moving a countdown
     # while the reader is still asleep on its old alarm. See next_expected.
-    fridge.touch_checkin(wake_in, live_on)
+    battery = store.parse_battery(x_battery)
+    nth = fridge.touch_checkin(wake_in, live_on, battery)
     entry = fridge.selected_entry()
+    # THE NUMBER THAT MEANS SOMETHING. props.n is which check-in this was, so
+    # the board can separate a reader that pulled once while somebody was
+    # setting it up from one that has been waking on a fridge for a month.
+    # Without it the only question answerable was "has it ever spoken", and
+    # that counts an abandoned setup as a user.
+    #
+    # `device` comes from the reader's own header, which Live's /api/pull has
+    # always carried (bridge::getToFile calls identify()) and this service
+    # used to throw away. It is what joins a fridge to the rest of the fleet.
+    events.post(
+        SERVICE,
+        "checkin",
+        device=events.client_for(request).device,
+        props={
+            "fridge": fridge_key(fridge.id),
+            "n": nth,
+            "live_on": bool(live_on),
+            "wake_in_s": int(wake_in),
+            # Only when the reader sent one: an absent reading is not 0%.
+            **({"battery": battery} if battery is not None else {}),
+        },
+    )
 
     headers = {
         # Seconds, not a wall-clock time: the reader arms a relative timer and
@@ -395,8 +526,17 @@ async def claim(request: Request) -> JSONResponse:
     if got is None:
         return refused("That code did not work. Check the reader's screen.", 404)
     fridge = store.Fridge(got["fridge_id"])
-    if not fridge.exists():
-        return refused("That reader is gone.", 404)
+    if got.get("joining"):
+        # A join code adds a phone to a fridge that already exists; if it is
+        # gone, there is nothing to join.
+        if not fridge.exists():
+            return refused("That reader is gone.", 404)
+    elif not fridge.exists():
+        # A setup code, claimed: THIS is where a fridge starts existing. Before
+        # 2026-09-21 it was written when the code was shown, so every abandoned
+        # setup screen left one behind for ever.
+        fridge.create(token_hash(got["device_token"]))
+        store.index_token(got["device_token"], fridge.id)
     name = str(body.get("name", "") or "A phone")
     if not store.add_sender(fridge, got["sender_token"], name):
         # Refused, never silently rotated. Dropping the oldest to make room
@@ -406,6 +546,18 @@ async def claim(request: Request) -> JSONResponse:
             f"That reader already has {store.MAX_SENDERS} phones. Remove one on the reader first.",
             409,
         )
+    # Somebody at the other end typed the code. This is the first Live number
+    # that involves two people, and it is still not a user: a pairing that
+    # never checks in twice is an abandoned setup.
+    events.post(
+        SERVICE,
+        "paired",
+        props={
+            "fridge": fridge_key(fridge.id),
+            "joining": bool(got.get("joining")),
+            "senders": len(fridge.load().get("senders", [])),
+        },
+    )
     resp = JSONResponse({"ok": True, "fridgeId": got["fridge_id"]})
     # Secure follows the scheme the request actually arrived on rather than
     # being hardcoded. In production that is always https (Cloudflare
@@ -457,7 +609,6 @@ def state(live_sender: str = Cookie(default=None)) -> JSONResponse:
         return JSONResponse({"connected": False})
     s = fridge.load()
     schedule = fridge.schedule()
-    armed = fridge.armed()
     body = {
         "connected": True,
         "lastCheckin": s.get("last_checkin", 0),
@@ -470,7 +621,6 @@ def state(live_sender: str = Cookie(default=None)) -> JSONResponse:
             "dailyTime": schedule["daily_time"],
             "tz": schedule["tz"],
         },
-        "armedSeconds": store.cadence_seconds(armed),
         # 0 while Live is off on the reader: there is no next check, and a
         # figure there would be one the page then has to explain away.
         "nextExpected": fridge.next_expected(),
@@ -485,7 +635,33 @@ def state(live_sender: str = Cookie(default=None)) -> JSONResponse:
     pending = pending_sentence(fridge)
     if pending:
         body["pending"] = pending
+    # THE READER'S BATTERY AND WHEN IT SAID SO. Absent until a reader has
+    # reported one, so the page shows nothing rather than a 0% nobody measured.
+    if isinstance(s.get("battery"), int):
+        body["battery"] = s["battery"]
+        body["batteryAt"] = int(s.get("battery_at", 0))
     return JSONResponse(body)
+
+
+@app.get("/api/battery")
+def battery(live_sender: str = Cookie(default=None)) -> JSONResponse:
+    """Thirty days of the reader's battery, for the graph behind the chip.
+
+    Its own call rather than part of /api/state: the page polls the state, and
+    a month of readings is only wanted when somebody opens the graph.
+    """
+    fridge = _sender_fridge(live_sender)
+    if fridge is None or not fridge.exists():
+        return refused("This browser is not connected to a reader.", 401)
+    now = int(time.time())
+    points = fridge.battery_log(now)
+    outlook = store.battery_outlook(points, now)
+    body = {"now": now, "points": [[t, p] for t, p in points]}
+    if "charged_at" in outlook:
+        body["chargedAt"] = outlook["charged_at"]
+    if "days_left" in outlook:
+        body["daysLeft"] = outlook["days_left"]
+    return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- history
@@ -538,8 +714,18 @@ def history_thumb(
     return Response(
         content=png,
         media_type="image/png",
-        # Content-addressed, so it can never change under this entry.
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        headers={
+            # PRIVATE. This picture is behind a session: `public` invited any
+            # shared cache between here and a phone to keep one person's
+            # drawing and hand it to the next, and it let the browser reuse a
+            # copy fetched before the page started sending credentials --
+            # which then had no CORS header and was refused. Content-addressed
+            # still, so it never changes under this entry.
+            "Cache-Control": "private, max-age=31536000, immutable",
+            # The answer differs by Origin, so anything caching it has to key
+            # on that rather than serve the first copy it happened to store.
+            "Vary": "Origin",
+        },
     )
 
 
@@ -568,6 +754,15 @@ async def send(request: Request, live_sender: str = Cookie(default=None)) -> JSO
         )
     kind = request.headers.get("x-kind", "drawing")
     entry = fridge.add_entry(payload, kind, store.sender_name(fridge, live_sender))
+    # A phone sent a picture. No `device`: this request comes from a browser,
+    # and attributing it to one would put a phone into the reader count. `kind`
+    # rides along because a drawing and a photo are different things to send
+    # and the difference is free to record here.
+    events.post(
+        SERVICE,
+        "image",
+        props={"fridge": fridge_key(fridge.id), "bytes": len(payload), "kind": kind},
+    )
     return JSONResponse(
         {
             "ok": True,
