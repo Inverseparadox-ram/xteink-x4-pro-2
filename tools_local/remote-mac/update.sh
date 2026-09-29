@@ -1,8 +1,7 @@
 #!/bin/sh
 # Brings the Mac half up to date in one step: pull, build, install, restart,
-# then show what the helper reports. Run it from anywhere:
-#
-#   ~/xteink-x4-pro-2/tools_local/remote-mac/update.sh
+# then show what the helper reports. From this folder, `./update.sh`; from
+# anywhere else, the full path to it. It finds its own folder either way.
 #
 # It asks for your Mac password once, for the copy into /usr/local/bin.
 set -e

@@ -99,11 +99,15 @@ it is an agent and not a login item.
 ## Updating
 
 After the first install, one command brings it up to date -- pull, build,
-install, restart, and print what the helper reports:
+install, restart, and print what the helper reports. From this folder,
+wherever you cloned it:
 
 ```sh
-~/xteink-x4-pro-2/tools_local/remote-mac/update.sh
+./update.sh
 ```
+
+It works from any directory if you give the full path. `mdfind -name
+CrossPlayUnlock.swift` finds this folder if you have lost track of it.
 
 It asks for your Mac password once, for the copy into `/usr/local/bin`.
 
