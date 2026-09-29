@@ -135,6 +135,24 @@ enum Crypto {
 enum Base32 {
     static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
 
+    // The canonical spelling of a secret, in the reader's eight groups of
+    // four, so `pair` can show back what it understood.
+    static func encode(_ secret: Data) -> String {
+        let bytes = [UInt8](secret)
+        guard bytes.count == 20 else { return "" }
+        var out = ""
+        for i in 0..<32 {
+            let bit = i * 5
+            let byte = bit / 8
+            let shift = bit % 8
+            var window = UInt32(bytes[byte]) << 8
+            if byte + 1 < 20 { window |= UInt32(bytes[byte + 1]) }
+            if i > 0 && i % 4 == 0 { out += i % 8 == 0 ? "  " : " " }
+            out.append(alphabet[Int((window >> UInt32(11 - shift)) & 0x1F)])
+        }
+        return out
+    }
+
     static func decode(_ text: String) -> Data? {
         var symbols: [UInt8] = []
         for raw in text.uppercased() {
@@ -568,7 +586,6 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private let microphones = Microphones()
     private var lastMacState: Data?
     private let ledger = Ledger()
-    private let secret: Data
 
     private var heard: [String: NowPlaying.Heard] = [:]
     private var observers: [NSObjectProtocol] = []
@@ -577,8 +594,7 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     // reconnect: the reader forgets the song when its radio goes down.
     private var lastSent: Data?
 
-    init(secret: Data) {
-        self.secret = secret
+    override init() {
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
         microphones.onChange = { [weak self] in self?.sendMacState() }
@@ -749,6 +765,14 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             log("challenge speaks version \(challenge.version); we speak \(Wire.version)")
             return
         }
+        // The secret is read from the Keychain for EVERY request, never once at
+        // startup. `pair` is a separate process that replaces it while this one
+        // runs; a copy held from launch answered every request after a re-pair
+        // as a stranger's, silently, until ten of them locked the helper out.
+        guard let secret = Store.get("secret") else {
+            log("not paired; ignoring. Run: crossplay-unlock pair")
+            return
+        }
         ledger.reload()
         if ledger.isBlocked {
             log(ledger.lockedOut ? "locked out; ignoring. Run: crossplay-unlock unblock" : "pausing; ignoring")
@@ -837,6 +861,14 @@ func commandPair() {
     }
     Store.set("secret", secret)
     Store.set("password", Data(password.utf8))
+    // Every well-formed code decodes to SOME secret, so a mistyped character
+    // is not an error here -- it is a pairing that silently never answers.
+    // Showing back what was understood is the one place it can be caught.
+    print("")
+    print("Check this matches the reader, group by group:")
+    print("  \(Base32.encode(secret))")
+    print("If any group differs, run crossplay-unlock pair again.")
+    print("")
     // Before anything can arrive under the new secret.
     Ledger().reset()
     print("Paired. Both are in the login Keychain under \(Store.service), and the replay counter is back to zero.")
@@ -893,11 +925,10 @@ func commandForget() {
 var runningAgent: Agent?
 
 func commandRun() {
-    guard let secret = Store.get("secret") else {
-        print("Not paired. Run: crossplay-unlock pair")
-        exit(1)
-    }
-    runningAgent = Agent(secret: secret)
+    // Runs unpaired too, and picks the pairing up when `pair` stores one:
+    // exiting here would have launchd restart it every ten seconds forever.
+    if Store.get("secret") == nil { log("not paired yet. Run: crossplay-unlock pair") }
+    runningAgent = Agent()
     log("crossplay-unlock running")
     // RunLoop, not dispatchMain(): distributed notifications arrive through a
     // run-loop source, which dispatchMain() never services. The run loop drains

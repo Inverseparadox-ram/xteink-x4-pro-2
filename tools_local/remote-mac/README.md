@@ -129,6 +129,11 @@ shows a 32-character code in eight groups of four, **once**. Type that into
 `crossplay-unlock pair`, then press either side key on the reader. That is the
 whole pairing.
 
+`pair` prints back the code it understood, grouped as the reader shows it.
+**Compare them.** Every well-formed code is a valid secret, so a mistyped
+character is not an error anywhere -- it is a pairing that never answers. The
+running helper picks the new pairing up by itself; nothing needs restarting.
+
 A reader paired under a combination or a touch PIN, by an earlier build, has to
 pair again once. So does a reader that has had a USB full flash, which erases
 the internal flash the pairing lives in.
@@ -235,7 +240,7 @@ program may set; it is the one kind this cannot silence.
 | --- | --- |
 | The padlock stays a question mark | The agent is not running, or Bluetooth permission was denied. `tail /tmp/crossplay-unlock.log` |
 | "The Mac is connected, but the unlock helper is not running" | HID is up (every other button works) and nothing has subscribed to the challenge characteristic |
-| "The Mac did not answer" | The helper is not running, is pausing or LOCKED OUT (`crossplay-unlock status`, then `crossplay-unlock unblock`), or holds a different pairing -- pair again. The log says which: `locked out; ignoring` or `a challenge arrived that this reader did not sign` |
+| "The Mac did not answer" | The helper is pausing or LOCKED OUT (`crossplay-unlock status`, then `crossplay-unlock unblock`), or holds a different pairing than the reader. The log says which: `locked out; ignoring`, or `a challenge arrived that this reader did not sign` for a mismatch. A helper built before the fix for it kept the secret it started with, so every re-pair needed `launchctl kickstart -k gui/$(id -u)/com.crossplay.unlock` -- and its refusals counted towards the lockout. Current builds read the secret for every request |
 | The microphone button never fills | The Mac has not reported every input muted. `crossplay-unlock status` shows how many are; the log names any it `cannot mute` |
 | No song on the reader | Nothing has played, paused or changed track since the helper started, or the player is a browser. Press play |
 | `Killed: 9` when running `crossplay-unlock` | A new build was copied over the old one in place. `sudo rm /usr/local/bin/crossplay-unlock`, copy it again, then `launchctl kickstart -k gui/$(id -u)/com.crossplay.unlock`. `update.sh` does this itself |
