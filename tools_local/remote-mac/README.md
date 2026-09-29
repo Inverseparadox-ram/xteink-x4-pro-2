@@ -96,6 +96,17 @@ To take it back out: `launchctl bootout gui/$(id -u)/com.crossplay.unlock`.
 A LaunchAgent keeps running behind the lock screen, which is the whole reason
 it is an agent and not a login item.
 
+## Updating
+
+After the first install, one command brings it up to date -- pull, build,
+install, restart, and print what the helper reports:
+
+```sh
+~/xteink-x4-pro-2/tools_local/remote-mac/update.sh
+```
+
+It asks for your Mac password once, for the copy into `/usr/local/bin`.
+
 ## Pairing
 
 On the reader: open **Remote** and press the padlock. With nothing paired it
