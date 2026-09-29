@@ -489,6 +489,10 @@ weather_done    = check       # leaves it. A 32px cut of the same glyph
 
 # The clock app.
 clock = clock
+
+# The stocks app. A line over a baseline and an axis: a price over time, and
+# nothing else on the APPS shelf is a chart.
+stocks = chart-line
 # WORDLE is five letter tiles, and no Lucide icon is a row of tiles that does not
 # read as a text field. `spell-check` is letters with a tick under them: a word
 # checked, which is what every guess is. Spliced in by hand (see the warning at

@@ -26,7 +26,7 @@ devices with an 800x480 panel, capacitive touch and two physical buttons
 (three on the Sticky; the design uses the two shared buttons), and
 [CrossPoint](https://crosspointreader.com/) already makes them good at reading.
 CrossPlay is firmware that keeps all of that and adds the other things a screen
-that holds still is good at: **25 games and 12 apps**,
+that holds still is good at: **25 games and 13 apps**,
 spaced-repetition flashcards, comics, a read-later queue, and two devices that
 play together with nothing to set up.
 
@@ -86,6 +86,7 @@ the import lands a real pack instead of failing on an unreachable host.
 | **Clock**       | The time and the month, with a stopwatch and a timer up to 59:59.        |
 | **Weather**     | A full forecast for any place, from Open-Meteo, kept readable on the card. |
 | **Remote**      | A Bluetooth media remote for whatever your Mac is playing.               |
+| **Stocks**      | A NASDAQ and NSE watchlist, what it is worth, today or the last ten days. |
 | **Get Books**   | Browse any OPDS catalog and download straight to the card, no computer.  |
 | **Instapaper**  | Your read-later queue, synced both ways: reading position and archiving. |
 | **Wallpapers**  | Pick an image on the card as the sleep screen, one tap to set it.        |

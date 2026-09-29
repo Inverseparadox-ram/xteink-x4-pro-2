@@ -166,7 +166,7 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
                                            inner, static_cast<int16_t>(bodyH - 6)),
                              fui::Paint::solid(fui::Color::Black));
       }
-      char charge[8];
+      char charge[16];
       std::snprintf(charge, sizeof(charge), "%d%%", percent);
       screen.target().text(fui::makeRect(static_cast<int16_t>(toybox::kMargin + bodyW + 3 + gutter / 2),
                                          static_cast<int16_t>(y + timeH), textW, chargeH),

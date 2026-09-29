@@ -55,6 +55,8 @@ mkdir -p "$BUILD_DIR"
   ../../src/apps_local/weather/WeatherScreens.cpp \
   ../../src/apps_local/remote/RemoteCore.cpp \
   ../../src/apps_local/remote/RemoteScreens.cpp \
+  ../../src/apps_local/stocks/StocksCore.cpp \
+  ../../src/apps_local/stocks/StocksScreens.cpp \
   ../../src/apps_local/insider/InsiderCore.cpp \
   ../../src/apps_local/insider/InsiderScreens.cpp \
   ../../src/apps_local/knucklebones/KnucklebonesScreens.cpp \

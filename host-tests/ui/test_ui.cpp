@@ -47,6 +47,7 @@
 #include "../../src/apps_local/remote/RemoteScreens.h"
 #include "../../src/apps_local/seasalt/SeaSaltScreens.h"
 #include "../../src/apps_local/solitaire/SolitaireScreens.h"
+#include "../../src/apps_local/stocks/StocksScreens.h"
 #include "../../src/apps_local/study/StudyScreens.h"
 #include "../../src/apps_local/sudoku/SudokuScreens.h"
 #include "../../src/apps_local/toybattle/ToyBattleMenus.h"
@@ -15439,6 +15440,155 @@ void theMenuOffersTodayOnlyWhenThereIsOne() {
 
 }  // namespace wordletest
 
+// --- Stocks ----------------------------------------------------------------
+
+template <typename Model, typename Builder>
+void buildStocks(Rendered& out, const Model& model, Builder builder) {
+  const fui::DeviceContext ctx = device();
+  const fui::InputSnapshot noInput{};
+  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+  toybox::Screen screen(frame, toybox::themeTokens());
+  builder(screen, model);
+}
+
+stocks::Series stocksSeries(const stocks::Span span, const int points) {
+  stocks::Series s;
+  s.span = span;
+  s.price = 110;
+  s.previousClose = 100;
+  s.currency = "USD";
+  s.marketTime = 1790711940;
+  s.gmtOffset = -14400;
+  for (int i = 0; i < points; ++i) {
+    stocks::Point p;
+    p.time = 1790688600 + i * (span == stocks::Span::Today ? 300 : 86400);
+    p.close = p.open = p.high = p.low = static_cast<float>(100 + i);
+    s.points.push_back(p);
+  }
+  return s;
+}
+
+// Every row is tappable and says which row it is; the toggle and EDIT are
+// live; and a row's tap lands on that row, not its neighbour.
+void testStocksListRowsAreLive() {
+  const stocks::Series s = stocksSeries(stocks::Span::Today, 20);
+  stocksui::StockRow rows[3];
+  const char* symbols[3] = {"AAPL", "RELIANCE", "INFY"};
+  for (int i = 0; i < 3; ++i) {
+    rows[i].symbol = symbols[i];
+    rows[i].detail = "NASDAQ";
+    rows[i].price = "$110.00";
+    rows[i].change = "+10.00%";
+    rows[i].trend = 1;
+    rows[i].series = &s;
+  }
+  stocksui::WorthLine worth[2];
+  worth[0].value = "$1,100.00";
+  worth[0].change = "+100.00 (+10.00%)";
+  worth[1].value = "Rs 6,000.00";
+  worth[1].change = "-200.00 (-3.23%)";
+  worth[1].trend = -1;
+
+  Rendered out;
+  stocksui::ListModel model;
+  model.rows = rows;
+  model.count = 3;
+  model.total = 3;
+  model.worth = worth;
+  model.worthCount = 2;
+  buildStocks(out, model, stocksui::buildList);
+  CHECK(out.has(stocksui::ActionOpenStock));
+  CHECK(out.has(stocksui::ActionSpanToday));
+  CHECK(out.has(stocksui::ActionSpanDays));
+  CHECK(out.has(stocksui::ActionEdit));
+  CHECK(out.has(stocksui::ActionRefresh));
+  CHECK(!out.interactions.overflowed());
+  CHECK(drewText(out, "RELIANCE"));
+  CHECK(drewText(out, "Rs 6,000.00"));
+  CHECK(drewText(out, "HOLDINGS  .  TODAY"));
+
+  int rowsSeen = 0;
+  for (size_t i = 0; i < out.interactions.count(); ++i) {
+    const fui::Interaction& hit = out.interactions.data()[i];
+    if (hit.action != stocksui::ActionOpenStock) continue;
+    const fui::ActionEvent event = out.tap(hit.rect.x + hit.rect.width / 2, hit.rect.y + hit.rect.height / 2);
+    CHECK(event.action == stocksui::ActionOpenStock);
+    CHECK(event.value == hit.value);
+    ++rowsSeen;
+  }
+  CHECK(rowsSeen == 3);
+}
+
+void testStocksEditAndEmpty() {
+  stocksui::StockRow row;
+  row.symbol = "TCS";
+  row.detail = "NSE  .  5 shares";
+  Rendered out;
+  stocksui::ListModel model;
+  model.rows = &row;
+  model.count = 1;
+  model.total = 1;
+  model.editing = true;
+  buildStocks(out, model, stocksui::buildList);
+  CHECK(out.has(stocksui::ActionEditStock));
+  CHECK(!out.has(stocksui::ActionOpenStock));
+  CHECK(out.has(stocksui::ActionAdd));
+  CHECK(out.has(stocksui::ActionEdit));
+  // No refresh while editing: the band button spends a network round trip.
+  CHECK(!out.has(stocksui::ActionRefresh));
+
+  Rendered empty;
+  stocksui::ListModel none;
+  buildStocks(empty, none, stocksui::buildList);
+  CHECK(drewText(empty, "NO STOCKS"));
+  CHECK(empty.has(stocksui::ActionEdit));
+  CHECK(!empty.has(stocksui::ActionRefresh));
+
+  Rendered menu;
+  stocksui::StockMenuModel m;
+  m.symbol = "TCS";
+  m.detail = "NSE  .  5 shares";
+  buildStocks(menu, m, stocksui::buildStockMenu);
+  CHECK(menu.has(stocksui::ActionChangeShares));
+  CHECK(menu.has(stocksui::ActionRemoveStock));
+  CHECK(menu.has(stocksui::ActionKeepStock));
+}
+
+void testStocksDetailBothSpans() {
+  for (const stocks::Span span : {stocks::Span::Today, stocks::Span::Days}) {
+    const stocks::Series s = stocksSeries(span, span == stocks::Span::Today ? 40 : 10);
+    stocksui::Stat stats[4] = {{"OPEN", "100.00"}, {"HIGH", "139.00"}, {"LOW", "100.00"}, {"PREV CLOSE", "100.00"}};
+    Rendered out;
+    stocksui::DetailModel model;
+    model.symbol = "AAPL";
+    model.name = "Apple Inc.  .  NASDAQ";
+    model.price = "$110.00";
+    model.move = "+10.00 (+10.00%)";
+    model.trend = 1;
+    model.asOf = "Tue 29, 3:59 PM exchange time";
+    model.series = &s;
+    model.stats = stats;
+    model.statCount = 4;
+    model.holding = "10 SHARES  $1,100.00";
+    model.holdingMove = "+100.00 (+10.00%) today";
+    model.holdingTrend = 1;
+    buildStocks(out, model, stocksui::buildDetail);
+    CHECK(out.has(stocksui::ActionRefresh));
+    CHECK(out.has(stocksui::ActionSpanToday));
+    CHECK(out.has(stocksui::ActionSpanDays));
+    CHECK(drewText(out, "$110.00"));
+    CHECK(drewText(out, "10 SHARES  $1,100.00"));
+    CHECK(!out.interactions.overflowed());
+  }
+  // Nothing fetched: the screen says so rather than drawing an empty chart.
+  Rendered out;
+  stocksui::DetailModel model;
+  model.symbol = "ZZZZ";
+  model.problem = "Yahoo says: No data found, symbol may be delisted";
+  buildStocks(out, model, stocksui::buildDetail);
+  CHECK(drewText(out, "NO PRICE YET"));
+}
+
 int main() {
   notestest::aNoteAsleepIsReadOnlyAndTaller();
   wordletest::everyKeyIsWhereItIsDrawn();
@@ -15716,6 +15866,9 @@ int main() {
   testASixRowMonthDrawsEveryDay();
   testAnUnsetClockSaysSoRatherThanGuessing();
   testEveryRemoteControlIsLive();
+  testStocksListRowsAreLive();
+  testStocksEditAndEmpty();
+  testStocksDetailBothSpans();
   testEveryRemoteControlWinsItsOwnCentre();
   testSeekNumbersAppearOnlyWhereTheProfileKeepsThem();
   testThePairingSentenceAppearsOnlyWhenItIsNeeded();

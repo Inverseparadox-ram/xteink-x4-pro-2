@@ -38,6 +38,7 @@
 #include "remote/RemoteActivity.h"
 #include "seasalt/SeaSaltActivity.h"
 #include "solitaire/SolitaireActivity.h"
+#include "stocks/StocksActivity.h"
 #include "study/StudyActivity.h"
 #include "sudoku/SudokuActivity.h"
 #include "toybattle/ToyBattleActivity.h"
@@ -101,6 +102,7 @@ constexpr shelf::Item kApps[] = {
     {"CLOCK", &icon_clock_32, &ClockActivity::create},
     {"WEATHER", &icon_weather_32, &WeatherActivity::create},
     {"REMOTE", &icon_remote_32, &RemoteActivity::create},
+    {"STOCKS", &icon_stocks_32, &StocksActivity::create},
 };
 
 // The two rows Home grows, in reading order. Titles are Title Case because
