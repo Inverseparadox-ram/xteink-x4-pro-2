@@ -15,6 +15,11 @@ echo "== building"
 
 echo "== installing"
 sudo mkdir -p /usr/local/bin
+# Removed first, so the copy is a NEW file. macOS caches a program's code
+# signature against the file itself; cp over an existing signed program
+# rewrites the bytes under a cached signature that describes the old ones, and
+# the kernel kills the new program on launch with "Killed: 9".
+sudo rm -f /usr/local/bin/crossplay-unlock
 sudo cp crossplay-unlock /usr/local/bin/
 
 echo "== restarting the helper"

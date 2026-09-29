@@ -55,6 +55,7 @@ at the first play, pause or track change after it starts.
 ```sh
 ./build.sh
 sudo mkdir -p /usr/local/bin
+sudo rm -f /usr/local/bin/crossplay-unlock
 sudo cp crossplay-unlock /usr/local/bin/
 crossplay-unlock pair
 ```
@@ -67,6 +68,12 @@ because these get pasted into a shell rather than read. **zsh does not treat
 `#` as a comment when it is interactive** -- `interactive_comments` is off by
 default -- so a commented `sudo mkdir -p /usr/local/bin` creates directories
 called `#`, `Apple` and `Silicon` in whatever folder you are standing in.
+
+The `rm` before the `cp` is not tidiness. macOS caches a program's code
+signature against the file itself, so copying a new build over the old one
+leaves a cached signature that describes the old bytes, and the kernel kills
+the new program the moment it starts: `Killed: 9`, with no other message.
+Removing it first makes the copy a new file with nothing cached against it.
 
 `/usr/local/bin` is on the default PATH (`/etc/paths` lists it) but nothing
 creates it on a Mac whose Homebrew lives in `/opt/homebrew`, so the copy fails
@@ -228,6 +235,7 @@ program may set; it is the one kind this cannot silence.
 | The reader stays on UNLOCKING however you enter the combination | A wrong combination looks exactly like this, by design. So does a helper that is pausing or LOCKED OUT: `crossplay-unlock status`, and `crossplay-unlock unblock` if it says so. The log says `locked out; ignoring` |
 | The microphone button never fills | The Mac has not reported every input muted. `crossplay-unlock status` shows how many are; the log names any it `cannot mute` |
 | No song on the reader | Nothing has played, paused or changed track since the helper started, or the player is a browser. Press play |
+| `Killed: 9` when running `crossplay-unlock` | A new build was copied over the old one in place. `sudo rm /usr/local/bin/crossplay-unlock`, copy it again, then `launchctl kickstart -k gui/$(id -u)/com.crossplay.unlock`. `update.sh` does this itself |
 | The log says "replayed" | The two counters are out of step. Re-pairing used to cause it; `pair` now resets this side and the running helper re-reads it before every request, so a build from before those fixes is the likely reason. Delete `~/Library/Application Support/CrossPlayUnlock/ledger.json`, then `launchctl kickstart -k gui/$(id -u)/com.crossplay.unlock` |
 | The password is typed but wrong | Non-US keyboard layout, or the password changed since `pair` -- `crossplay-unlock password` fixes the second without disturbing the pairing |
 | `status` says `password: missing` after a password reset | The login Keychain was reset with it, which happens when the password is recovered through an Apple ID rather than changed in System Settings. Re-pair |
