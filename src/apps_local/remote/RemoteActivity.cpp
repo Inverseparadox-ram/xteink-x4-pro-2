@@ -6,6 +6,10 @@
 #include <Logging.h>
 #include <Memory.h>
 
+#if defined(CROSSPLAY_BLE_HID)
+#include <Preferences.h>
+#endif
+
 #include <cstdio>
 #include <cstring>
 
@@ -24,18 +28,28 @@ constexpr const char* kSettings = "/.crosspoint/remote/settings.txt";
 // one fact a HID peripheral can report back, and it changes slowly.
 constexpr uint32_t kBatteryIntervalMs = 60000;
 
-// The unlock pairing: a salt, the sealed secret and the replay counter. Its
-// own file rather than a line in settings.txt, because it is binary and
-// because deleting it is how the pairing is forgotten.
-constexpr const char* kPairing = "/.crosspoint/remote/unlock.bin";
-// 2: sealed under the side-key combination. A version-1 file was sealed under
-// a touch PIN nobody can now enter, so it is refused and the unlock re-pairs.
-constexpr uint8_t kPairingVersion = 2;
+// The unlock pairing -- the shared secret and the replay counter -- lives in
+// the reader's INTERNAL flash, not on the SD card. Nothing seals it (the
+// padlock unlocks on one tap, by the owner's choice), so the card, which is
+// removed and read in other machines to load books, is the wrong place for it:
+// a copy of the secret is enough to ask the Mac for its password. Taking it
+// out of internal flash needs the reader, a cable and flashing tools.
+//
+// Preferences, as DeviceReport.cpp keeps its own device secret. A USB full
+// flash erases this along with the Bluetooth bond, so both pair again; the SD
+// card updater leaves both alone.
+constexpr const char* kPairingSpace = "rcunlock";
+constexpr const char* kPairingSecretKey = "secret";
+constexpr const char* kPairingCounterKey = "counter";
 
-// How long the unlocking screen waits for a side key before giving the panel
-// back. Long enough to find the keys and press eight; short enough that a
-// reader put down mid-entry is not left saying UNLOCKING.
-constexpr uint32_t kUnlockIdleMs = 30000;
+// Where earlier builds kept the pairing, sealed under a combination. Deleted
+// on sight: it is useless without that combination and is exactly the thing
+// that should not be on the card.
+constexpr const char* kLegacyPairing = "/.crosspoint/remote/unlock.bin";
+
+// The simulator has no internal flash to speak of, so it keeps the pairing on
+// its pretend card instead. Never built for a device.
+constexpr const char* kSimPairing = "/.crosspoint/remote/unlock-sim.bin";
 
 // How long the login window is given to come up and take focus after the
 // display is woken. Too early and the password lands on a black screen that
@@ -184,56 +198,73 @@ void RemoteActivity::cycleProfile() {
 // argument in full; this is the part that drives it.
 
 bool RemoteActivity::loadPairing() {
+  counter_ = 0;
+#if defined(CROSSPLAY_BLE_HID)
+  if (Storage.exists(kLegacyPairing)) {
+    Storage.remove(kLegacyPairing);
+    LOG_INF(kTag, "unlock: removed an old sealed pairing from the card");
+  }
+  Preferences prefs;
+  // Read-only, and false when the namespace has never been written: that is
+  // simply "not paired".
+  if (!prefs.begin(kPairingSpace, true)) return false;
+  const bool ok = prefs.getBytesLength(kPairingSecretKey) == sizeof(secret_) &&
+                  prefs.getBytes(kPairingSecretKey, secret_, sizeof(secret_)) == sizeof(secret_);
+  counter_ = prefs.getULong64(kPairingCounterKey, 0);
+  prefs.end();
+  return ok;
+#else
   HalFile file;
-  if (!Storage.openFileForRead(kTag, kPairing, file)) return false;
-  uint8_t buffer[1 + remote::vault::kSaltLen + remote::vault::kSecretLen + 8] = {};
+  if (!Storage.openFileForRead(kTag, kSimPairing, file)) return false;
+  uint8_t buffer[remote::vault::kSecretLen + 8] = {};
   const int n = file.read(buffer, sizeof(buffer));
   file.close();
-  if (n != static_cast<int>(sizeof(buffer)) || buffer[0] != kPairingVersion) {
-    LOG_INF(kTag, "unlock: no usable pairing on the card");
-    return false;
-  }
-  size_t at = 1;
-  std::memcpy(salt_, buffer + at, sizeof(salt_));
-  at += sizeof(salt_);
-  std::memcpy(sealed_, buffer + at, sizeof(sealed_));
-  at += sizeof(sealed_);
-  counter_ = 0;
-  for (size_t i = 0; i < 8; ++i) counter_ = (counter_ << 8) | buffer[at + i];
+  if (n != static_cast<int>(sizeof(buffer))) return false;
+  std::memcpy(secret_, buffer, sizeof(secret_));
+  for (size_t i = 0; i < 8; ++i) counter_ = (counter_ << 8) | buffer[sizeof(secret_) + i];
   return true;
+#endif
 }
 
 void RemoteActivity::savePairing() {
-  Storage.ensureDirectoryExists(kDir);
-  uint8_t buffer[1 + remote::vault::kSaltLen + remote::vault::kSecretLen + 8] = {};
-  buffer[0] = kPairingVersion;
-  size_t at = 1;
-  std::memcpy(buffer + at, salt_, sizeof(salt_));
-  at += sizeof(salt_);
-  std::memcpy(buffer + at, sealed_, sizeof(sealed_));
-  at += sizeof(sealed_);
-  for (size_t i = 0; i < 8; ++i) buffer[at + i] = static_cast<uint8_t>(counter_ >> (56 - i * 8));
-  HalFile file;
-  if (!Storage.openFileForWrite(kTag, kPairing, file)) {
-    LOG_ERR(kTag, "unlock: could not write the pairing");
+#if defined(CROSSPLAY_BLE_HID)
+  Preferences prefs;
+  if (!prefs.begin(kPairingSpace, false)) {
+    LOG_ERR(kTag, "unlock: could not open internal storage for the pairing");
     return;
   }
+  prefs.putBytes(kPairingSecretKey, secret_, sizeof(secret_));
+  prefs.putULong64(kPairingCounterKey, counter_);
+  prefs.end();
+#else
+  Storage.ensureDirectoryExists(kDir);
+  uint8_t buffer[remote::vault::kSecretLen + 8] = {};
+  std::memcpy(buffer, secret_, sizeof(secret_));
+  for (size_t i = 0; i < 8; ++i) buffer[sizeof(secret_) + i] = static_cast<uint8_t>(counter_ >> (56 - i * 8));
+  HalFile file;
+  if (!Storage.openFileForWrite(kTag, kSimPairing, file)) return;
   file.write(buffer, sizeof(buffer));
   file.close();
+#endif
 }
 
 void RemoteActivity::clearSecrets() {
   remote::vault::wipe(secret_, sizeof(secret_));
   remote::vault::wipe(freshSecret_, sizeof(freshSecret_));
-  remote::vault::wipe(firstCombo_, sizeof(firstCombo_));
   remote::vault::wipe(pairCode_, sizeof(pairCode_));
-  resetCombo();
-  haveSecret_ = false;
 }
 
 void RemoteActivity::forgetUnlockPairing() {
   clearSecrets();
-  Storage.remove(kPairing);
+#if defined(CROSSPLAY_BLE_HID)
+  Preferences prefs;
+  if (prefs.begin(kPairingSpace, false)) {
+    prefs.clear();
+    prefs.end();
+  }
+#else
+  Storage.remove(kSimPairing);
+#endif
   RenderLock lock(*this);
   paired_ = false;
   counter_ = 0;
@@ -260,131 +291,32 @@ void RemoteActivity::tapUnlock() {
 
   // An unlocked Mac is locked with a plain keyboard chord and no exchange at
   // all. Locking is not a security decision -- the worst a forged one can do
-  // is lock a screen -- so it needs no combination and must keep working when
-  // the helper is asleep, which is exactly when somebody wants it.
+  // is lock a screen -- so it must keep working when the helper is asleep,
+  // which is exactly when somebody wants it.
   if (remote::vault::intentFor(macScreen_) == remote::vault::Intent::Lock) {
     sendLockChord();
     return;
   }
 
-  // Asking for a combination the Mac cannot check would leave someone pressing
-  // side keys at a screen that will never change. Say so on the panel instead.
-  if (!remote::helper::helperPresent()) {
-    RenderLock lock(*this);
-    unlockDetail_ = "The Mac is connected, but the unlock helper is not running.";
-    requestUpdate();
-    return;
-  }
+  // One tap. The Mac is the one that knows whether its screen is locked, so
+  // it answers with the state AND, only if it really is locked, the password.
+  startChallenge(remote::vault::Op::Unlock);
+}
 
-  // EVERY unlock asks for the combination, even with a secret already open
-  // from an earlier one. A reader left on this screen must not unlock the Mac
-  // for whoever picks it up next.
+void RemoteActivity::finishPairing() {
   RenderLock lock(*this);
-  resetCombo();
-  unlockDetail_ = "";
-  lastKeyAt_ = millis();
-  phase_ = Phase::Unlocking;
-  requestUpdate();
-}
-
-void RemoteActivity::resetCombo() {
-  remote::vault::wipe(combo_, sizeof(combo_));
-  comboLen_ = 0;
-}
-
-void RemoteActivity::sideKey(const remote::SideKey key) {
-  if (phase_ == Phase::Pair) {
-    // Either key moves on from the pairing code; touch has been unreliable
-    // enough that the one screen asking for a confirmation takes a key too.
-    startComboSet();
-    return;
-  }
-  if (phase_ == Phase::ComboSet) {
-    setupKey(key);
-    return;
-  }
-  if (phase_ != Phase::Unlocking || unlockBusy_) return;
-
-  // No repaint. The screen says UNLOCKING and nothing else, and a refresh per
-  // press would itself tell a watcher how many presses had landed.
-  combo_[comboLen_++] = key;
-  lastKeyAt_ = millis();
-  if (comboLen_ < remote::kComboLength) return;
-
-  char pin[remote::kComboLength + 1];
-  const bool made = remote::comboToPin(combo_, comboLen_, pin, sizeof(pin));
-  resetCombo();
-  if (!made) return;
-  // This always "works": a wrong combination yields a wrong secret and nothing
-  // on the reader can tell. The Mac finds out, by refusing to answer.
-  remote::vault::openSecret(sealed_, pin, salt_, secret_);
-  remote::vault::wipe(pin, sizeof(pin));
-  haveSecret_ = true;
-  if (!startChallenge(remote::vault::Op::Unlock)) {
-    // Only when there is no helper to ask; the panel says so.
-    clearSecrets();
-    RenderLock lock(*this);
-    phase_ = Phase::Remote;
-    requestUpdate();
-  }
-}
-
-void RemoteActivity::startComboSet() {
-  RenderLock lock(*this);
-  resetCombo();
-  remote::vault::wipe(firstCombo_, sizeof(firstCombo_));
-  confirming_ = false;
-  comboDetail_ = "Press the side keys eight times, left or right, in an order you will remember.";
-  phase_ = Phase::ComboSet;
-  requestUpdate();
-}
-
-void RemoteActivity::setupKey(const remote::SideKey key) {
-  RenderLock lock(*this);
-  combo_[comboLen_++] = key;
-  if (comboLen_ < remote::kComboLength) {
-    requestUpdate();
-    return;
-  }
-
-  if (!confirming_) {
-    std::memcpy(firstCombo_, combo_, sizeof(firstCombo_));
-    resetCombo();
-    confirming_ = true;
-    comboDetail_ = "Once more: the same eight.";
-    requestUpdate();
-    return;
-  }
-
-  const bool same = std::memcmp(firstCombo_, combo_, sizeof(combo_)) == 0;
-  if (!same) {
-    // A combination chosen with a slip in it is one the owner cannot unlock
-    // with, and the reader could not tell them why. So it is caught here.
-    resetCombo();
-    remote::vault::wipe(firstCombo_, sizeof(firstCombo_));
-    confirming_ = false;
-    comboDetail_ = "Those did not match. Start again: eight presses.";
-    requestUpdate();
-    return;
-  }
-
-  char pin[remote::kComboLength + 1];
-  remote::comboToPin(combo_, comboLen_, pin, sizeof(pin));
-  resetCombo();
-  remote::vault::wipe(firstCombo_, sizeof(firstCombo_));
-  remote::helper::randomBytes(salt_, sizeof(salt_));
-  remote::vault::sealSecret(freshSecret_, pin, salt_, sealed_);
-  remote::vault::wipe(pin, sizeof(pin));
   std::memcpy(secret_, freshSecret_, sizeof(secret_));
   remote::vault::wipe(freshSecret_, sizeof(freshSecret_));
   remote::vault::wipe(pairCode_, sizeof(pairCode_));
   counter_ = 0;
   savePairing();
   paired_ = true;
-  haveSecret_ = true;
   phase_ = Phase::Remote;
   macScreen_ = remote::vault::Screen::Unknown;
   unlockDetail_ = "";
+  // Ask straight away, so the padlock shows the Mac's real state rather than
+  // a question.
+  statusDueAt_ = millis() + kStatusFollowUpMs;
   requestUpdate();
   LOG_INF(kTag, "unlock: paired");
 }
@@ -411,7 +343,7 @@ void RemoteActivity::sendLockChord() {
 }
 
 bool RemoteActivity::startChallenge(const remote::vault::Op op) {
-  if (!haveSecret_) return false;
+  if (!paired_) return false;
   if (!remote::helper::helperPresent()) {
     RenderLock lock(*this);
     // The distinction matters and no mark carries it: the Mac is connected as
@@ -443,9 +375,7 @@ bool RemoteActivity::startChallenge(const remote::vault::Op op) {
   pending_ = challenge;
   unlockBusy_ = true;
   unlockDetail_ = "";
-  // Not repainted while the combination is being checked: the unlocking
-  // screen does not change until the answer is in.
-  if (phase_ != Phase::Unlocking) requestUpdate();
+  requestUpdate();
   return true;
 }
 
@@ -453,35 +383,19 @@ void RemoteActivity::pollChallenge() {
   if (!unlockBusy_) {
     if (statusDueAt_ != 0 && millis() >= statusDueAt_) {
       statusDueAt_ = 0;
-      if (haveSecret_) startChallenge(remote::vault::Op::Status);
-    }
-    // Nobody pressing anything: give the panel back rather than holding a
-    // screen that only says UNLOCKING. Touch is unreliable, and a swipe back
-    // should not be the only way out.
-    if (phase_ == Phase::Unlocking && millis() - lastKeyAt_ > kUnlockIdleMs) {
-      RenderLock lock(*this);
-      resetCombo();
-      phase_ = Phase::Remote;
-      requestUpdate();
+      // Quietly: a status check nobody asked for must not put "the helper is
+      // not running" on the panel, only a tap of the padlock should.
+      if (paired_ && remote::helper::helperPresent()) startChallenge(remote::vault::Op::Status);
     }
     return;
   }
 
   const remote::helper::State state = remote::helper::poll();
   if (state == remote::helper::State::TimedOut) {
+    // The helper answers nothing it cannot verify, so silence means it is not
+    // running, is paused or locked out after wrong answers, or no longer holds
+    // this reader's pairing. `crossplay-unlock status` on the Mac says which.
     remote::helper::cancel();
-    if (phase_ == Phase::Unlocking) {
-      // THIS is what a wrong combination looks like. The helper does not
-      // answer a request signed with the wrong secret -- an answer would tell
-      // a guesser which guess was right -- so silence is the refusal. The
-      // secret it opened is wrong and is dropped, the screen stays exactly as
-      // it was, and the next eight presses are a fresh try.
-      clearSecrets();
-      RenderLock lock(*this);
-      unlockBusy_ = false;
-      lastKeyAt_ = millis();
-      return;
-    }
     RenderLock lock(*this);
     unlockBusy_ = false;
     macScreen_ = remote::vault::Screen::Unknown;
@@ -496,7 +410,6 @@ void RemoteActivity::pollChallenge() {
     RenderLock lock(*this);
     unlockBusy_ = false;
     unlockDetail_ = "The Mac answered with something that is not an answer.";
-    if (phase_ == Phase::Unlocking) phase_ = Phase::Remote;
     requestUpdate();
     return;
   }
@@ -506,28 +419,22 @@ void RemoteActivity::pollChallenge() {
 void RemoteActivity::finishUnlock(const remote::vault::Response& response) {
   const remote::vault::Verdict verdict = remote::vault::verifyResponse(secret_, sizeof(secret_), pending_, response);
   if (verdict != remote::vault::Verdict::Ok) {
-    // Not the paired Mac, or not an answer to this question. Whatever sent it
-    // is not trusted with anything, including the secret it was checked
-    // against.
+    // Not the paired Mac, or not an answer to this question. Nothing it says
+    // is believed, and nothing is typed.
     LOG_INF(kTag, "unlock: refused, verdict %d", static_cast<int>(verdict));
-    clearSecrets();
     RenderLock lock(*this);
     unlockBusy_ = false;
     macScreen_ = remote::vault::Screen::Unknown;
     unlockDetail_ = "The Mac's answer did not check out.";
-    phase_ = Phase::Remote;
     requestUpdate();
     return;
   }
 
   {
-    // An answer that verifies is the proof the combination was right, and the
-    // only one there is. The unlocking screen gives way to the panel.
     RenderLock lock(*this);
     unlockBusy_ = false;
     macScreen_ = response.screen;
     unlockDetail_ = "";
-    phase_ = Phase::Remote;
     requestUpdate();
   }
 
@@ -605,6 +512,11 @@ void RemoteActivity::loop() {
     lastBatteryAt_ = millis();
     remote::setBattery(static_cast<uint8_t>(powerManager.getBatteryPercentage()));
   }
+  // When the helper appears -- the app just opened, or the Mac reconnected --
+  // ask it straight away, so the padlock shows the Mac's real state.
+  const bool helperNow = remote::helper::helperPresent();
+  if (helperNow && !helperWasPresent_ && paired_ && !unlockBusy_) statusDueAt_ = millis() + 300;
+  helperWasPresent_ = helperNow;
   pollChallenge();
   // A track change is the one thing the Mac pushes unprompted. The link
   // reports only CHANGES, so this repaints on a new song and never on a timer.
@@ -623,16 +535,11 @@ void RemoteActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (phase_ != Phase::Remote) {
-      // Backing out of the combination or the pairing code abandons whatever
-      // it was for; nothing half-entered is kept. A check already in flight is
-      // abandoned too, so its answer cannot land on a screen that has gone.
-      if (unlockBusy_) remote::helper::cancel();
+      // Backing out of the pairing code abandons it: the Mac may have been
+      // given the code, but this reader keeps nothing of it.
       remote::vault::wipe(freshSecret_, sizeof(freshSecret_));
       remote::vault::wipe(pairCode_, sizeof(pairCode_));
-      remote::vault::wipe(firstCombo_, sizeof(firstCombo_));
       RenderLock lock(*this);
-      resetCombo();
-      unlockBusy_ = false;
       phase_ = Phase::Remote;
       requestUpdate();
       return;
@@ -642,21 +549,19 @@ void RemoteActivity::loop() {
   }
 
   // Physically LEFT is logical Up and physically RIGHT is Down (docs/buttons.md).
-  // On the panel they are volume, the control reached for without looking; on
-  // the combination and pairing screens they are the input itself.
-  const bool left = mappedInput.wasReleased(MappedInputManager::Button::Up);
-  const bool right = !left && mappedInput.wasReleased(MappedInputManager::Button::Down);
-  if (left || right) {
+  // On the panel they are volume, the control reached for without looking. On
+  // the pairing code either one moves on, because touch has been unreliable
+  // enough that the one screen asking for a confirmation takes a key too.
+  const bool up = mappedInput.wasReleased(MappedInputManager::Button::Up);
+  const bool down = !up && mappedInput.wasReleased(MappedInputManager::Button::Down);
+  if (up || down) {
     if (phase_ == Phase::Remote) {
-      volumeStep(left);
-    } else {
-      sideKey(left ? remote::SideKey::Left : remote::SideKey::Right);
+      volumeStep(up);
+    } else if (phase_ == Phase::Pair) {
+      finishPairing();
     }
     return;
   }
-  // The combination screen takes nothing by touch: a stray tap from the hand
-  // holding the reader must not land anywhere while it is being entered.
-  if (phase_ == Phase::Unlocking) return;
 
   int tapX = 0;
   int tapY = 0;
@@ -689,9 +594,7 @@ void RemoteActivity::loop() {
       tapUnlock();
       break;
     case remoteui::ActionPairDone:
-      // The code has been typed into the Mac. Now the combination that seals
-      // it here.
-      startComboSet();
+      finishPairing();
       break;
     case remoteui::ActionForward:
       seek(true);
@@ -763,16 +666,6 @@ void RemoteActivity::render(RenderLock&&) {
         "settings, or it will refuse to pair again.";
     remoteui::buildForgetConfirm(screen, model);
     what = "Remote unpair";
-  } else if (phase_ == Phase::Unlocking) {
-    remoteui::buildUnlocking(screen);
-    what = "Remote unlocking";
-  } else if (phase_ == Phase::ComboSet) {
-    remoteui::ComboSetModel model;
-    model.confirming = confirming_;
-    model.entered = comboLen_;
-    model.detail = comboDetail_;
-    remoteui::buildComboSet(screen, model);
-    what = "Remote combination";
   } else if (phase_ == Phase::Pair) {
     remoteui::PairModel model;
     model.code = pairCode_;
@@ -828,11 +721,8 @@ void RemoteActivity::render(RenderLock&&) {
   toybox::reportOverflow(interactions_, what);
   const bool phaseChanged = !everShown_ || phase_ != lastShownPhase_;
 
-  // No hints on the unlocking screen, which says one word and nothing else.
-  if (phase_ != Phase::Unlocking) {
-    const auto labels = mappedInput.mapLabels("Back", "", "Vol+", "Vol-");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  }
+  const auto labels = mappedInput.mapLabels("Back", "", "Vol+", "Vol-");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 
   if (phaseChanged) {

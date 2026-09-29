@@ -8,7 +8,6 @@
 
 #include "../ui/ToyboxIcons.h"
 #include "../ui/ToyboxText.h"
-#include "RemoteCore.h"
 
 namespace remoteui {
 namespace {
@@ -294,47 +293,6 @@ void buildForgetConfirm(toybox::Screen& screen, const ForgetModel& model) {
 }
 
 // --- Unlock ----------------------------------------------------------------
-
-void buildUnlocking(toybox::Screen& screen) {
-  // No chrome: a header band would be a second thing on the screen, and this
-  // one is meant to say exactly one word.
-  const fui::DeviceContext& device = screen.device();
-  const int16_t lineH = screen.target().lineHeight(toybox::kDisplayFont);
-  screen.target().text(fui::makeRect(0, static_cast<int16_t>((device.height - lineH) / 2), device.width, lineH),
-                       "UNLOCKING", plain(toybox::kDisplayFont, fui::TextAlign::Center, fui::Color::Black, 1));
-}
-
-void buildComboSet(toybox::Screen& screen, const ComboSetModel& model) {
-  chrome(screen, model.confirming ? "AGAIN" : "COMBINATION", nullptr, false);
-
-  const fui::DeviceContext& device = screen.device();
-  const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
-  const int16_t gutter = static_cast<int16_t>(toybox::kGutter);
-  int16_t y = static_cast<int16_t>(kBodyTop + toybox::kMargin);
-
-  const int16_t lineH = screen.target().lineHeight(toybox::kUiFont);
-  screen.target().text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 5)), model.detail,
-                       plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::Black, 5));
-  y = static_cast<int16_t>(y + lineH * 5 + gutter * 2);
-
-  // One mark per press, filled as they land. Which side was pressed is never
-  // drawn: the count is what a person needs to keep their place, and the
-  // sequence is what somebody behind them would need to copy it.
-  constexpr int16_t kSlot = 22;
-  constexpr int16_t kSlotGap = 16;
-  const int16_t slots = static_cast<int16_t>(remote::kComboLength);
-  const int16_t slotsWidth = static_cast<int16_t>(slots * kSlot + (slots - 1) * kSlotGap);
-  int16_t slotX = static_cast<int16_t>(toybox::kMargin + (width - slotsWidth) / 2);
-  for (int16_t i = 0; i < slots; ++i) {
-    const fui::Rect where = fui::makeRect(slotX, y, kSlot, kSlot);
-    if (i < static_cast<int16_t>(model.entered)) {
-      screen.target().fill(where, fui::Paint::solid(fui::Color::Black), kSlot / 2);
-    } else {
-      screen.target().stroke(where, fui::Paint::solid(fui::Color::Black), 1, kSlot / 2);
-    }
-    slotX = static_cast<int16_t>(slotX + kSlot + kSlotGap);
-  }
-}
 
 void buildPair(toybox::Screen& screen, const PairModel& model) {
   chrome(screen, "PAIR", nullptr, false);

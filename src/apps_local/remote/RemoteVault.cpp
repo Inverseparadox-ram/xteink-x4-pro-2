@@ -232,36 +232,6 @@ bool constantTimeEquals(const uint8_t* a, const uint8_t* b, const size_t len) {
   return difference == 0;
 }
 
-void pbkdf2(const uint8_t* password, const size_t passwordLen, const uint8_t* salt, const size_t saltLen,
-            const uint32_t iterations, uint8_t* out, const size_t outLen) {
-  uint8_t block[kHashLen];
-  uint8_t accumulator[kHashLen];
-  // The salt with the big-endian block index appended, which is what PBKDF2's
-  // first iteration hashes.
-  uint8_t seed[kSaltLen + 64 + 4];
-  const size_t seedSaltLen = saltLen > sizeof(seed) - 4 ? sizeof(seed) - 4 : saltLen;
-  std::memcpy(seed, salt, seedSaltLen);
-
-  for (size_t done = 0; done < outLen;) {
-    const uint32_t index = static_cast<uint32_t>(done / kHashLen) + 1;
-    seed[seedSaltLen] = static_cast<uint8_t>(index >> 24);
-    seed[seedSaltLen + 1] = static_cast<uint8_t>(index >> 16);
-    seed[seedSaltLen + 2] = static_cast<uint8_t>(index >> 8);
-    seed[seedSaltLen + 3] = static_cast<uint8_t>(index);
-    hmacSha256(password, passwordLen, seed, seedSaltLen + 4, block);
-    std::memcpy(accumulator, block, kHashLen);
-    for (uint32_t i = 1; i < iterations; ++i) {
-      hmacSha256(password, passwordLen, block, kHashLen, block);
-      for (size_t j = 0; j < kHashLen; ++j) accumulator[j] = static_cast<uint8_t>(accumulator[j] ^ block[j]);
-    }
-    const size_t take = (outLen - done) < kHashLen ? (outLen - done) : kHashLen;
-    std::memcpy(out + done, accumulator, take);
-    done += take;
-  }
-  wipe(block, sizeof(block));
-  wipe(accumulator, sizeof(accumulator));
-}
-
 void wipe(void* data, const size_t len) {
   volatile uint8_t* p = static_cast<volatile uint8_t*>(data);
   for (size_t i = 0; i < len; ++i) p[i] = 0;
@@ -309,32 +279,6 @@ bool decodeSecret(const char* text, uint8_t out[kSecretLen]) {
     if (byte + 1 < kSecretLen) out[byte + 1] = static_cast<uint8_t>(out[byte + 1] | (window & 0xff));
   }
   return true;
-}
-
-// --- Sealing ----------------------------------------------------------------
-
-void sealSecret(const uint8_t secret[kSecretLen], const char* pin, const uint8_t salt[kSaltLen],
-                uint8_t out[kSecretLen]) {
-  uint8_t key[kSecretLen];
-  pbkdf2(reinterpret_cast<const uint8_t*>(pin), std::strlen(pin), salt, kSaltLen, kPinIterations, key, sizeof(key));
-  for (size_t i = 0; i < kSecretLen; ++i) out[i] = static_cast<uint8_t>(secret[i] ^ key[i]);
-  wipe(key, sizeof(key));
-}
-
-void openSecret(const uint8_t sealed[kSecretLen], const char* pin, const uint8_t salt[kSaltLen],
-                uint8_t out[kSecretLen]) {
-  // XOR is its own inverse, which is the only reason one function would do.
-  sealSecret(sealed, pin, salt, out);
-}
-
-bool pinIsWellFormed(const char* pin) {
-  if (pin == nullptr) return false;
-  size_t len = 0;
-  for (const char* p = pin; *p != '\0'; ++p) {
-    if (*p < '0' || *p > '9') return false;
-    ++len;
-  }
-  return len >= kPinMinLen && len <= kPinMaxLen;
 }
 
 // --- The exchange -----------------------------------------------------------

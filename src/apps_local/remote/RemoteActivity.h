@@ -36,7 +36,7 @@ class RemoteActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  enum class Phase : uint8_t { Remote, Forget, Unlocking, ComboSet, Pair };
+  enum class Phase : uint8_t { Remote, Forget, Pair };
 
   void press(remote::Key key);
   void seek(bool forward);
@@ -50,10 +50,7 @@ class RemoteActivity final : public Activity {
 
   void tapUnlock();
   void beginPairing();
-  void sideKey(remote::SideKey key);
-  void resetCombo();
-  void startComboSet();
-  void setupKey(remote::SideKey key);
+  void finishPairing();
   bool startChallenge(remote::vault::Op op);
   void pollChallenge();
   void finishUnlock(const remote::vault::Response& response);
@@ -75,31 +72,17 @@ class RemoteActivity final : public Activity {
 
   // --- Unlock state ---------------------------------------------------------
   //
-  // `sealed_` is what is on the card; `secret_` is what a PIN opened it into
-  // and exists in RAM only, for as long as the app is open. Nothing here is
-  // ever written out in the clear.
+  // The shared secret and the replay counter, loaded from internal flash when
+  // the app opens and wiped from RAM when it closes. No Mac password is ever
+  // here: the Mac sends it, sealed, only at the moment of unlocking.
   bool paired_ = false;
-  uint8_t salt_[remote::vault::kSaltLen] = {};
-  uint8_t sealed_[remote::vault::kSecretLen] = {};
+  uint8_t secret_[remote::vault::kSecretLen] = {};
   uint64_t counter_ = 0;
 
-  bool haveSecret_ = false;
-  uint8_t secret_[remote::vault::kSecretLen] = {};
-
-  // Held only between the PAIR screen and the PIN that seals it.
+  // Held only while the pairing code is on screen, until a key or TYPED IT
+  // makes it the pairing.
   uint8_t freshSecret_[remote::vault::kSecretLen] = {};
   char pairCode_[33] = {};
-
-  // The side keys pressed so far, on the unlocking screen or while choosing.
-  // Wiped the moment eight have been turned into a secret, and on every exit.
-  remote::SideKey combo_[remote::kComboLength] = {};
-  uint8_t comboLen_ = 0;
-  uint32_t lastKeyAt_ = 0;
-
-  // Choosing: the first eight, held until the second eight match them.
-  remote::SideKey firstCombo_[remote::kComboLength] = {};
-  bool confirming_ = false;
-  const char* comboDetail_ = "";
 
   // The last VERIFIED answer, and nothing else. A reader that remembered what
   // it had done rather than what it had been told would be wrong the first
@@ -120,6 +103,10 @@ class RemoteActivity final : public Activity {
 
   // What the Mac last reported about its microphones.
   remote::MacState macState_;
+
+  // Whether the helper was subscribed at the last loop, so its arrival --
+  // the app opening, the Mac reconnecting -- can trigger a status check.
+  bool helperWasPresent_ = false;
 
   // Last time the link state was drawn, so the screen can follow a connection
   // appearing without repainting e-ink on a timer.

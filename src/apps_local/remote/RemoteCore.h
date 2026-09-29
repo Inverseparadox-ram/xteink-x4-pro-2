@@ -76,32 +76,6 @@ const char* backSeconds(Profile profile);
 // having to keep a thumb on the panel. HID keyboard usage 0x41.
 inline constexpr uint8_t kHoldKeyUsage = 0x41;
 
-// --- The unlock combination ----------------------------------------------
-//
-// The two side keys, pressed in order: LEFT and RIGHT. It replaced a touch
-// PIN pad the panel did not register reliably, and a side key always does.
-//
-// FIXED LENGTH, because the unlock screen shows nothing but UNLOCKING and so
-// has no other way to know the entry is finished -- and because the sealed
-// secret has no verifier, the reader cannot tell a right combination from a
-// wrong one until the Mac says so. After exactly kComboLength presses it asks.
-//
-// Eight presses is 256 combinations, far fewer than a four-digit PIN's 10,000.
-// What makes that tolerable is where guessing has to happen: there is nothing
-// on the reader to test a guess against, so every guess goes to the Mac, and
-// the helper stops answering altogether after ten wrong ones in a row until
-// someone at the Mac runs `crossplay-unlock unblock`. Ten tries at 256 is a
-// four percent chance, once.
-inline constexpr size_t kComboLength = 8;
-
-enum class SideKey : uint8_t { Left, Right };
-
-// The combination as the digit string RemoteVault seals under: '1' for left,
-// '2' for right. The vault stretches it exactly as it stretched a typed PIN.
-// `out` needs kComboLength + 1 bytes; returns false unless `count` is exactly
-// kComboLength, so a short entry can never reach the Mac as a guess.
-bool comboToPin(const SideKey* keys, size_t count, char* out, size_t size);
-
 // --- The microphone button -----------------------------------------------
 //
 // Reader -> Mac, over the helper's COMMAND characteristic: [version, command].
@@ -110,7 +84,7 @@ bool comboToPin(const SideKey* keys, size_t count, char* out, size_t size);
 // helper can do this.
 //
 // NOT authenticated beyond the Bluetooth bond, deliberately: it has to work
-// without the unlock combination, and the bond already means the only
+// without the Mac verifying anything, and the bond already means the only
 // central listening is the Mac that paired. The worst a hijacked command can
 // do is change whether the Mac's microphones are muted.
 

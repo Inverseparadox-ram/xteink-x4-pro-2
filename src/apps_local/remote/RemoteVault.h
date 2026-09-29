@@ -4,10 +4,9 @@
 //
 // Freestanding C++17 -- no NimBLE, no mbedTLS, no Arduino -- so
 // host-tests/remotevault builds it with a bare compiler and checks the MAC
-// against RFC 4231's published vectors and the key derivation against RFC
-// 7914's. That is the whole reason SHA-256 is reimplemented here rather than
-// called from the ESP-IDF: a MAC nobody can run on a host is a MAC nobody can
-// prove, and "it compiled" is not a proof.
+// against RFC 4231's published vectors. That is the whole reason SHA-256 is
+// reimplemented here rather than called from the ESP-IDF: a MAC nobody can run
+// on a host is a MAC nobody can prove, and "it compiled" is not a proof.
 //
 // ---------------------------------------------------------------------------
 // WHAT THIS CAN AND CANNOT DO. Read this before trusting it.
@@ -37,18 +36,15 @@
 //      whatever field has focus -- a chat window, a search box, a shared
 //      screen.
 //
-//   4. A STOLEN READER IS NOT A KEY. The secret is not stored; it is stored
-//      SEALED under a PIN the user types, and -- this is the part that
-//      matters -- NO VERIFIER IS STORED BESIDE IT. Every PIN yields a
-//      well-formed 20-byte secret, so an attacker holding the SD card has
-//      nothing to test a guess against offline. The only oracle is the Mac
-//      itself, which sees a bad MAC and backs off. See sealSecret().
-//
 // What it does NOT buy, stated plainly so nobody has to infer it:
 //
-//   - Anyone who has the reader AND the PIN can unlock the Mac. That is the
-//     design, not a flaw in it: it is a key and a code, and it is exactly two
-//     factors, one of them a thing you carry.
+//   - THE READER IS A KEY. One tap of the padlock unlocks the Mac, with no
+//     code entered on the reader, by the owner's choice. So anyone holding the
+//     reader, near the Mac, while the Mac is logged in and locked, can unlock
+//     it. The secret is kept in the reader's internal flash rather than on its
+//     removable SD card, so copying it takes the reader, a cable and flashing
+//     tools rather than a minute with a card reader -- but it is not sealed
+//     under anything.
 //   - It does nothing at the FileVault pre-boot screen. Bluetooth is not up
 //     that early, so a Mac that has been powered off needs its keyboard.
 //   - It does not protect against a compromised Mac. A machine that is already
@@ -74,10 +70,6 @@ void hmacSha256(const uint8_t* key, size_t keyLen, const uint8_t* data, size_t l
 // forge one a byte at a time.
 bool constantTimeEquals(const uint8_t* a, const uint8_t* b, size_t len);
 
-// PBKDF2-HMAC-SHA256, RFC 8018. Here only to stretch the PIN; see sealSecret().
-void pbkdf2(const uint8_t* password, size_t passwordLen, const uint8_t* salt, size_t saltLen, uint32_t iterations,
-            uint8_t* out, size_t outLen);
-
 // --- The shared secret ------------------------------------------------------
 
 // 20 bytes, because it is typed in by hand exactly once. That is 160 bits --
@@ -92,38 +84,6 @@ void encodeSecret(const uint8_t secret[kSecretLen], char* out, size_t size);
 // people actually mistype: O for 0, I and L for 1. Returns false on any
 // character it cannot place or a length that is not 32.
 bool decodeSecret(const char* text, uint8_t out[kSecretLen]);
-
-// --- Sealing the secret under a PIN -----------------------------------------
-
-inline constexpr size_t kSaltLen = 16;
-inline constexpr size_t kPinMinLen = 4;
-inline constexpr size_t kPinMaxLen = 12;
-
-// Chosen so a wrong guess costs about a second on the reader's own CPU, which
-// is invisible next to the e-ink refresh that follows it and is the entire
-// budget an attacker gets per guess -- because guessing offline is the thing
-// this design removes.
-inline constexpr uint32_t kPinIterations = 20000;
-
-// XOR, deliberately, and this is the whole trick: a sealed secret is
-// INDISTINGUISHABLE FROM RANDOM under every PIN. There is no tag to check, no
-// padding to be wrong, no checksum to match -- so an attacker holding the
-// sealed bytes and the salt cannot tell a right guess from a wrong one without
-// asking the Mac, and the Mac counts. A sealed format with an integrity tag
-// would be the more conventional choice and would hand them an offline oracle
-// for a four-digit secret.
-//
-// It follows that this function cannot fail and openSecret cannot detect a bad
-// PIN. A wrong PIN produces a wrong secret, the Mac answers with BadMac, and
-// that is the only place the mistake can surface.
-void sealSecret(const uint8_t secret[kSecretLen], const char* pin, const uint8_t salt[kSaltLen],
-                uint8_t out[kSecretLen]);
-
-void openSecret(const uint8_t sealed[kSecretLen], const char* pin, const uint8_t salt[kSaltLen],
-                uint8_t out[kSecretLen]);
-
-// Digits only, kPinMinLen..kPinMaxLen of them.
-bool pinIsWellFormed(const char* pin);
 
 // --- The exchange -----------------------------------------------------------
 
@@ -208,7 +168,7 @@ enum class Verdict : uint8_t {
   Ok,
   BadVersion,
   CounterMismatch,  // a reply to a challenge this is not
-  BadMac,           // wrong PIN, an unpaired host, or a bent frame
+  BadMac,           // an unpaired host, or a bent frame
   BadPayload,       // authentic, but longer than anything we will type
 };
 

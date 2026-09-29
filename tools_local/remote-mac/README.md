@@ -27,13 +27,17 @@ Given that, the exchange buys three things:
    the real lock state inside the MAC, and sends no password at all unless the
    screen is locked. Without that, pressing unlock at an awake Mac puts the
    password into whatever field has focus.
-3. **A guess has to come through here.** The reader's secret is sealed under an
-   eight-press side-key combination with no verifier stored beside it, so there
-   is nothing to test a guess against offline. Every wrong combination shows up
-   here as a bad MAC, and is not answered. Five in a row start a pause that
-   doubles from 30 seconds; **ten in a row lock the helper out** until you run
-   `crossplay-unlock unblock`. The count is kept on disk, so restarting the
-   helper does not reset it.
+3. **Only the paired reader is answered.** A request signed with anything but
+   the paired secret shows up here as a bad MAC and is not answered. Five in a
+   row start a pause that doubles from 30 seconds; **ten in a row lock the
+   helper out** until you run `crossplay-unlock unblock`. The count is kept on
+   disk, so restarting the helper does not reset it.
+
+The reader unlocks on **one tap**, with nothing entered on it, so the reader
+itself is the key: anyone holding it near this Mac while you are logged in and
+locked can unlock it. The secret is kept in the reader's internal flash rather
+than on its SD card, so copying it takes the reader, a cable and flashing
+tools.
 
 It does nothing at the FileVault pre-boot screen: Bluetooth is not up that
 early, so a Mac that has been powered off needs its keyboard.
@@ -122,13 +126,12 @@ It asks for your Mac password once, for the copy into `/usr/local/bin`.
 
 On the reader: open **Remote** and press the padlock. With nothing paired it
 shows a 32-character code in eight groups of four, **once**. Type that into
-`crossplay-unlock pair`, then press either side key on the reader and enter an
-eight-press combination of left and right, twice.
+`crossplay-unlock pair`, then press either side key on the reader. That is the
+whole pairing.
 
-The combination seals the secret on the reader's SD card. There is no recovery:
-forget it and you re-pair, which means `crossplay-unlock pair` again with a new
-code. A reader paired with a touch PIN, before the combination existed, has to
-pair again once.
+A reader paired under a combination or a touch PIN, by an earlier build, has to
+pair again once. So does a reader that has had a USB full flash, which erases
+the internal flash the pairing lives in.
 
 Re-pairing generates a **new secret** on the reader and starts its counter over
 at zero, so `pair` resets the replay ledger here to match. It has to: the old
@@ -143,7 +146,7 @@ unlock button that verifies fine and never works.
 | --- | --- |
 | `crossplay-unlock pair` | store the reader's code and this Mac's password |
 | `crossplay-unlock password` | store a new password, keeping the pairing and its counter |
-| `crossplay-unlock unblock` | lift the lockout after ten wrong combinations, keeping the pairing |
+| `crossplay-unlock unblock` | lift the lockout after ten unverifiable requests, keeping the pairing |
 | `crossplay-unlock status` | what it has, and whether the screen is locked right now |
 | `crossplay-unlock forget` | delete both from the Keychain |
 | `crossplay-unlock run` | serve challenges; what launchd runs |
@@ -212,7 +215,7 @@ retries on the next change.
 `crossplay-unlock status` answers the same question from this side. Its
 `counter` is the high-water mark of challenges that VERIFIED -- it is bumped
 only after the MAC checks out -- so a number above zero is proof the pairing
-and the combination are both right. `wrong` is how many wrong answers in a row
+is right. `wrong` is how many wrong answers in a row
 it has seen, and says LOCKED OUT once it reaches ten. `mics` is how many input
 devices are muted right now.
 
@@ -232,7 +235,7 @@ program may set; it is the one kind this cannot silence.
 | --- | --- |
 | The padlock stays a question mark | The agent is not running, or Bluetooth permission was denied. `tail /tmp/crossplay-unlock.log` |
 | "The Mac is connected, but the unlock helper is not running" | HID is up (every other button works) and nothing has subscribed to the challenge characteristic |
-| The reader stays on UNLOCKING however you enter the combination | A wrong combination looks exactly like this, by design. So does a helper that is pausing or LOCKED OUT: `crossplay-unlock status`, and `crossplay-unlock unblock` if it says so. The log says `locked out; ignoring` |
+| "The Mac did not answer" | The helper is not running, is pausing or LOCKED OUT (`crossplay-unlock status`, then `crossplay-unlock unblock`), or holds a different pairing -- pair again. The log says which: `locked out; ignoring` or `a challenge arrived that this reader did not sign` |
 | The microphone button never fills | The Mac has not reported every input muted. `crossplay-unlock status` shows how many are; the log names any it `cannot mute` |
 | No song on the reader | Nothing has played, paused or changed track since the helper started, or the player is a browser. Press play |
 | `Killed: 9` when running `crossplay-unlock` | A new build was copied over the old one in place. `sudo rm /usr/local/bin/crossplay-unlock`, copy it again, then `launchctl kickstart -k gui/$(id -u)/com.crossplay.unlock`. `update.sh` does this itself |

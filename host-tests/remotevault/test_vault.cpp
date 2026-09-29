@@ -134,23 +134,6 @@ void testHmacAgainstRfc4231() {
   }
 }
 
-void testPbkdf2AgainstRfc7914() {
-  uint8_t out[64];
-  vault::pbkdf2(reinterpret_cast<const uint8_t*>("passwd"), 6, reinterpret_cast<const uint8_t*>("salt"), 4, 1, out,
-                sizeof(out));
-  check(hex(out, sizeof(out)) ==
-            "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc"
-            "49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783",
-        "pbkdf2-hmac-sha256 matches RFC 7914 at one iteration and two blocks");
-
-  vault::pbkdf2(reinterpret_cast<const uint8_t*>("Password"), 8, reinterpret_cast<const uint8_t*>("NaCl"), 4, 80000,
-                out, sizeof(out));
-  check(hex(out, sizeof(out)) ==
-            "4ddcd8f60b98be21830cee5ef22701f9641a4418d04c0414aeff08876b34ab56"
-            "a1d425a1225833549adb841b51c9b3176a272bdebba1d078478f62b397f33c8d",
-        "pbkdf2-hmac-sha256 matches RFC 7914 at eighty thousand iterations");
-}
-
 void testConstantTimeCompareStillCompares() {
   uint8_t a[vault::kHashLen];
   uint8_t b[vault::kHashLen];
@@ -213,61 +196,6 @@ void testThePairingCodeSurvivesBeingTypedByAHuman() {
   check(!vault::decodeSecret("0000000000000000000000000000000", back), "one symbol short is refused");
   check(!vault::decodeSecret("000000000000000000000000000000000", back), "one symbol long is refused");
   check(!vault::decodeSecret("0000000000000000000000000000000U", back), "a symbol outside the alphabet is refused");
-}
-
-// --- The PIN ----------------------------------------------------------------
-
-void testTheSealedSecretGivesNothingAwayOffline() {
-  uint8_t salt[vault::kSaltLen];
-  for (size_t i = 0; i < sizeof(salt); ++i) salt[i] = static_cast<uint8_t>(i * 17 + 5);
-
-  uint8_t sealed[vault::kSecretLen];
-  vault::sealSecret(kSecret, "482913", salt, sealed);
-
-  uint8_t opened[vault::kSecretLen];
-  vault::openSecret(sealed, "482913", salt, opened);
-  check(std::memcmp(opened, kSecret, sizeof(opened)) == 0, "the right PIN gives the secret back");
-
-  check(std::memcmp(sealed, kSecret, sizeof(sealed)) != 0, "the sealed bytes are not the secret");
-
-  // The claim the whole design rests on: a wrong PIN yields a DIFFERENT
-  // well-formed secret, with nothing to mark it wrong. If openSecret ever
-  // grew a tag or a checksum, this test would still pass -- so the check
-  // that matters is the one below it.
-  vault::openSecret(sealed, "482914", salt, opened);
-  check(std::memcmp(opened, kSecret, sizeof(opened)) != 0, "a wrong PIN gives a wrong secret");
-
-  // Every one of ten thousand four-digit PINs opens the blob into a secret
-  // that is a valid pairing code. There is no local oracle, which is what
-  // forces an attacker to ask the Mac -- and the Mac counts the asking.
-  // Sampled rather than exhaustive: the stretch is deliberately expensive.
-  char text[33];
-  for (int guess = 0; guess < 2000; guess += 197) {
-    char pin[8];
-    std::snprintf(pin, sizeof(pin), "%04d", guess);
-    vault::openSecret(sealed, pin, salt, opened);
-    vault::encodeSecret(opened, text, sizeof(text));
-    uint8_t back[vault::kSecretLen];
-    check(std::strlen(text) == 32 && vault::decodeSecret(text, back),
-          "a wrong PIN still produces a perfectly well-formed secret");
-  }
-
-  // A different salt is a different sealing, so two readers paired to the same
-  // Mac with the same PIN do not share a blob.
-  uint8_t otherSalt[vault::kSaltLen];
-  std::memcpy(otherSalt, salt, sizeof(salt));
-  otherSalt[0] = static_cast<uint8_t>(otherSalt[0] ^ 0x01);
-  uint8_t otherSealed[vault::kSecretLen];
-  vault::sealSecret(kSecret, "482913", otherSalt, otherSealed);
-  check(std::memcmp(sealed, otherSealed, sizeof(sealed)) != 0, "the salt changes the sealing");
-
-  check(!vault::pinIsWellFormed("123"), "three digits is too few");
-  check(vault::pinIsWellFormed("1234"), "four digits is the floor");
-  check(vault::pinIsWellFormed("123456789012"), "twelve digits is the ceiling");
-  check(!vault::pinIsWellFormed("1234567890123"), "thirteen is too many");
-  check(!vault::pinIsWellFormed("12a4"), "a letter is not a digit");
-  check(!vault::pinIsWellFormed(""), "an empty PIN is not a PIN");
-  check(!vault::pinIsWellFormed(nullptr), "no PIN at all is not a PIN");
 }
 
 // --- The frames -------------------------------------------------------------
@@ -346,24 +274,6 @@ void testOnlyTheHolderOfTheSecretCanBeBelieved() {
                        reinterpret_cast<const uint8_t*>(password), std::strlen(password), forged);
   check(vault::verifyResponse(kSecret, sizeof(kSecret), challenge, forged) == vault::Verdict::BadMac,
         "a one-bit-different secret cannot answer");
-
-  // The wrong PIN, end to end: it is the same attack, arriving from the other
-  // side. This is the ONLY place a mistyped PIN can be noticed.
-  uint8_t salt[vault::kSaltLen] = {};
-  uint8_t sealed[vault::kSecretLen];
-  vault::sealSecret(kSecret, "482913", salt, sealed);
-  uint8_t mistyped[vault::kSecretLen];
-  vault::openSecret(sealed, "482931", salt, mistyped);
-  const vault::Challenge underMistyped = [&] {
-    vault::Challenge c = challenge;
-    vault::signChallenge(mistyped, sizeof(mistyped), c);
-    return c;
-  }();
-  vault::Response answered;
-  vault::buildResponse(kSecret, sizeof(kSecret), underMistyped, vault::Screen::Locked,
-                       reinterpret_cast<const uint8_t*>(password), std::strlen(password), answered);
-  check(vault::verifyResponse(mistyped, sizeof(mistyped), underMistyped, answered) == vault::Verdict::BadMac,
-        "a mistyped PIN fails at the Mac and nowhere earlier");
 
   // Flipping the state the button reads. This is the attack that matters most
   // on an unlocked Mac: convince the reader the screen is locked and it types
@@ -524,10 +434,8 @@ void testWipeActuallyWipes() {
 int main() {
   testSha256AgainstPublishedVectors();
   testHmacAgainstRfc4231();
-  testPbkdf2AgainstRfc7914();
   testConstantTimeCompareStillCompares();
   testThePairingCodeSurvivesBeingTypedByAHuman();
-  testTheSealedSecretGivesNothingAwayOffline();
   testTheFramesRoundTrip();
   testOnlyTheHolderOfTheSecretCanBeBelieved();
   testTheChallengeIsAuthenticatedToo();

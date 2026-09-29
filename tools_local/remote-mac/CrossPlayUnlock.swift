@@ -11,7 +11,7 @@
 //
 //   crossplay-unlock pair      store the reader's code and this Mac's password
 //   crossplay-unlock password  store a new password, keeping the pairing
-//   crossplay-unlock unblock   lift the lockout after ten wrong combinations
+//   crossplay-unlock unblock   lift the lockout after ten unverifiable requests
 //   crossplay-unlock status    what it thinks it has
 //   crossplay-unlock forget    delete both from the Keychain
 //   crossplay-unlock run       serve challenges (what launchd runs)
@@ -201,12 +201,10 @@ enum Store {
 // The reader's counter only ever goes up, so anything at or below what we have
 // already accepted is a recording being played back at us.
 final class Ledger {
-    // Ten wrong answers in a row, and the helper stops answering altogether
-    // until someone at the Mac runs `crossplay-unlock unblock`. The reader's
-    // combination is eight presses of two keys -- 256 possibilities -- and the
-    // only thing that makes so few safe is that there is nothing on the reader
-    // to test a guess against, so every guess has to come here. Ten tries at
-    // 256 is a four percent chance, once, and then a person has to intervene.
+    // Ten unverifiable requests in a row, and the helper stops answering
+    // altogether until someone at the Mac runs `crossplay-unlock unblock`. The
+    // paired reader never sends one, so a run of them is something else
+    // trying: it gets ten tries, then a person has to intervene.
     static let lockoutAfter = 10
 
     private let path: URL
@@ -278,8 +276,8 @@ final class Ledger {
         try? JSONSerialization.data(withJSONObject: json).write(to: path)
     }
 
-    // A wrong MAC is a wrong combination or a stranger, and the reader cannot
-    // tell which. This is the only place either can be counted.
+    // A wrong MAC is a stranger, or a reader paired to a different secret.
+    // This is the only place either can be counted.
     var isBlocked: Bool { lockedOut || Date() < blockedUntil }
 
     func strike() {
@@ -879,7 +877,7 @@ func commandStatus() {
 
 func commandUnblock() {
     Ledger().unblock()
-    print("Unblocked. The reader can try its combination again; the pairing is unchanged.")
+    print("Unblocked. The reader can ask again; the pairing is unchanged.")
 }
 
 func commandForget() {

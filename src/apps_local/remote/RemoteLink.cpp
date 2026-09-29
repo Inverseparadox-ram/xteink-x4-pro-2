@@ -332,8 +332,8 @@ void randomBytes(uint8_t* out, const size_t len) {
 void begin() {}
 void end() {}
 const char* serviceUuid() { return kServiceUuid; }
-// CROSSPOINT_SIM_HELPER=1 lets the padlock reach the combination screens in a
-// simulator that has no radio and so no helper to check them against.
+// CROSSPOINT_SIM_HELPER=1 lets the padlock get as far as asking the Mac, in a
+// simulator that has no radio and so no helper to ask.
 bool helperPresent() {
   const char* env = std::getenv("CROSSPOINT_SIM_HELPER");
   return env != nullptr && env[0] == '1';

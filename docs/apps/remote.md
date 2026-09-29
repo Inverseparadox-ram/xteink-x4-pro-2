@@ -82,7 +82,7 @@ is a media key.
 | --- | --- | --- |
 | **F8** | One tap presses F8 and leaves it down; the next lets it go | No -- it is a plain key |
 | **Microphone** | Mutes every microphone the Mac has; tap again to unmute | Yes |
-| **Padlock** | Unlocks with the side-key combination, or locks with `⌃⌘Q` | Yes, to unlock |
+| **Padlock** | Unlocks on one tap, or locks with `⌃⌘Q` | Yes, to unlock |
 
 ### F8, held
 
@@ -114,7 +114,7 @@ one that worked. Until the Mac has said anything the button is outlined, and a
 tap then asks for a mute, the safe direction.
 
 The command is protected by the Bluetooth bond and nothing more, deliberately:
-it has to work without the unlock combination. The worst anything misusing it
+it has to work without asking the Mac to verify anything. The worst anything misusing it
 could do is change whether the microphones are muted.
 
 **It does not touch the camera.** macOS has no supported way for a program to
@@ -142,14 +142,14 @@ four things, and each is a failure it removes:
    real lock state inside the MAC, and sends no password unless the screen is
    locked. Without this the failure is ugly and silent: press unlock at an
    awake Mac and the password goes into whatever field has focus.
-4. **A stolen reader is not a key.** The secret is sealed under the side-key
-   combination, and no verifier is stored beside it -- every combination opens
-   the blob into a well-formed secret, so there is nothing to test a guess
-   against offline. The only oracle is the Mac, which slows down after five
-   wrong answers in a row and stops answering entirely after ten.
+4. **The secret is not on the SD card.** It lives in the reader's internal
+   flash, because a copy of it is enough to ask the Mac for its password, and
+   the card is the part that gets taken out and read in other machines.
 
-What it does **not** buy, stated plainly: anyone with the reader *and* the
-combination can unlock the Mac. That is the design -- a key and a code -- not a gap in it.
+What it does **not** buy, stated plainly: **the reader is a key.** The padlock
+unlocks on one tap with nothing entered on the reader, by the owner's choice,
+so anyone holding the reader, near the Mac, while the Mac is logged in and
+locked, can unlock it.
 And it does nothing at the FileVault pre-boot screen, because Bluetooth is not
 up that early.
 
@@ -202,38 +202,34 @@ the ESP-IDF: a MAC nobody can run on a host is a MAC nobody can prove.
 launchd plist, with the install steps in its own README. It keeps running
 behind the lock screen, which is the whole reason it is an agent.
 
-### The combination
+### One tap
 
-Eight presses of the two side keys, left or right, in order. It replaced a
-touch PIN pad whose taps the panel did not register reliably; a side key always
-registers.
+Press the padlock and the Mac unlocks: no code on the reader, no second step.
+The Mac still decides -- it answers only a request signed with the paired
+secret, and sends the password only if its screen really is locked -- but
+nothing is asked of the person holding the reader.
 
-**Unlocking.** Press the padlock and the screen says UNLOCKING and nothing
-else: no count, no dots, no hint of how far along the entry is or whether a
-press was right. Enter the eight presses. If they are right, the Mac answers
-and unlocks. If they are wrong, nothing visible happens -- the screen still
-says UNLOCKING and the next eight presses are a fresh try. Swipe back from the
-left edge to give up, or leave it: after 30 seconds with no press it returns to
-the panel. Every unlock asks for the combination, even straight after another.
+**Where the secret lives.** In the reader's internal flash (`Preferences`,
+the same store `DeviceReport.cpp` uses for its own device secret), not on the
+SD card. Nothing seals it, and a copy of it is enough to ask the Mac for its
+password from a fake device, so the removable card that gets read in other
+machines is the wrong place. The file earlier builds kept there,
+`/.crosspoint/remote/unlock.bin`, is deleted the first time the app opens.
 
-**Why a wrong entry looks like nothing.** The helper does not answer a request
-signed with the wrong secret, because an answer would tell a guesser which
-guess was right. So the reader waits four seconds, hears nothing, drops the
-secret it opened and starts again. An earlier version kept that wrong secret
-and reported "the Mac did not answer" to every later press until the app was
-reopened, which is exactly what a mistyped PIN on an unreliable pad produced.
+**A USB full flash forgets it,** along with the Bluetooth bond, because both
+live in the internal flash a full image writes over. The SD card updater keeps
+both. See **Updating without losing the pairing** below.
 
-**Why eight is enough.** 2^8 is 256 combinations, far fewer than a four-digit
-PIN's 10,000. What makes it tolerable is that guessing can only happen at the
-Mac, and the helper stops answering after ten wrong ones in a row until
-someone runs `crossplay-unlock unblock` there -- a four percent chance, once.
-The count survives the helper restarting. `kComboLength` in `RemoteCore.h` is
-the knob if you want more; 12 presses is 4,096.
+**When the Mac says nothing.** The helper does not answer a request it cannot
+verify, so "The Mac did not answer" means it is not running, it is paused or
+locked out after wrong answers, or it holds a different pairing -- the Mac was
+paired to another code since. `crossplay-unlock status` on the Mac says which.
+The lockout still counts: ten unverifiable requests in a row and the helper
+stops answering until `crossplay-unlock unblock`.
 
-The wrong-answer count is shared with everything else: after five in a row the
-helper pauses before answering again, doubling from 30 seconds. If an unlock
-that should work does nothing, `crossplay-unlock status` on the Mac says
-whether it is paused or locked out.
+**The padlock's face is right as soon as the app opens.** When the helper
+subscribes, the reader asks it straight away, so the face is the open or closed
+padlock rather than a question.
 
 ### Setting it up
 
@@ -241,15 +237,12 @@ whether it is paused or locked out.
    shows a 32-character code in eight groups of four, **once**.
 2. On the Mac, `crossplay-unlock pair`, and type that code and the login
    password.
-3. Back on the reader, press either side key, then enter the eight presses you
-   want. Enter them again to confirm; if the two do not match, it starts over.
+3. Back on the reader, press either side key, or TYPED IT. That is the whole
+   pairing.
 
-The setup screen counts presses as dots but never shows which side was
-pressed. There is no recovery: forget the combination and you re-pair.
-
-**A reader paired before the combination existed has to pair again,** once.
-Its secret was sealed under a touch PIN that can no longer be entered, so the
-reader refuses the old pairing file and the padlock starts at step 1.
+**A reader paired under a combination or a touch PIN has to pair again,**
+once: its secret was sealed under a code this build no longer asks for, and the
+old file is removed rather than read.
 
 ### Keyboard layout
 
@@ -316,10 +309,8 @@ panel, and each one is there because no drawing does its job:
   nothing to report, it collapses to a single bluetooth glyph -- the live
   controls under it are the rest of the message.
 
-Screens behind the panel use words where no picture can: **UNLOCKING**, which
-is the only thing the combination screen ever says; the **setup** screen, which
-counts presses and never shows their order; and the **pairing code**, which is
-a code from another machine.
+The one screen behind the panel that uses words is the **pairing code**, which
+is a code from another machine and cannot be a picture.
 
 The F8 button's face is a word too, because the button *is* that key.
 

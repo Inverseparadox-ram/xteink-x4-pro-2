@@ -115,24 +115,6 @@ void buildForgetConfirm(toybox::Screen& screen, const ForgetModel& model);
 
 // --- Unlock ----------------------------------------------------------------
 
-// While the side keys are entering the combination. One word and nothing
-// else: no count, no dots, no hint of how many presses remain or whether the
-// last one was right. Someone watching the screen learns only that an unlock
-// is under way.
-void buildUnlocking(toybox::Screen& screen);
-
-// Choosing the combination, once, right after pairing. This screen DOES show
-// how many presses so far, because a combination chosen blind and never
-// confirmed is one the owner can lock themselves out with -- the sealed secret
-// has no verifier, so a slip here is only discovered at the Mac.
-struct ComboSetModel {
-  bool confirming = false;  // the second time through, which must match the first
-  uint8_t entered = 0;      // presses so far, out of kComboLength
-  const char* detail = "";
-};
-
-void buildComboSet(toybox::Screen& screen, const ComboSetModel& model);
-
 // The pairing code, shown once. Eight groups of four, because thirty-two
 // unbroken characters is a line nobody types correctly.
 struct PairModel {

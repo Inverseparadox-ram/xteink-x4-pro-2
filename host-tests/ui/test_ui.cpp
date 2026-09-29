@@ -8899,22 +8899,6 @@ void buildTheRemote(Rendered& out, const remoteui::RemoteModel& model) {
   remoteui::buildRemote(screen, model);
 }
 
-void buildTheUnlocking(Rendered& out) {
-  const fui::DeviceContext ctx = device();
-  const fui::InputSnapshot noInput{};
-  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
-  toybox::Screen screen(frame, toybox::themeTokens());
-  remoteui::buildUnlocking(screen);
-}
-
-void buildTheComboSet(Rendered& out, const remoteui::ComboSetModel& model) {
-  const fui::DeviceContext ctx = device();
-  const fui::InputSnapshot noInput{};
-  toybox::Frame frame(out.target, ctx, noInput, out.interactions);
-  toybox::Screen screen(frame, toybox::themeTokens());
-  remoteui::buildComboSet(screen, model);
-}
-
 void buildThePair(Rendered& out, const remoteui::PairModel& model) {
   const fui::DeviceContext ctx = device();
   const fui::InputSnapshot noInput{};
@@ -9903,43 +9887,6 @@ void testALongTitleIsCutNotWrapped() {
   model.nowArtist = "";
   buildTheRemote(noArtist, model);
   CHECK(rectOf(shortTitle, remoteui::ActionPlayPause).y == rectOf(noArtist, remoteui::ActionPlayPause).y);
-}
-
-// The unlocking screen says one word. No count, no dots, no hints, nothing to
-// tap -- the combination comes from the side keys, and a watcher learns only
-// that an unlock is under way. Every one of those is checked, because each is
-// a thing a later edit could add back "to help".
-void testTheUnlockingScreenSaysOneWord() {
-  Rendered out;
-  buildTheUnlocking(out);
-  CHECK(drewText(out, "UNLOCKING"));
-  CHECK(out.interactions.count() == 0);
-  for (const char* hint : {"LEFT", "RIGHT", "PIN", "PRESS", "COMBINATION", "1", "2", "8"}) {
-    CHECK(!drewText(out, hint));
-  }
-}
-
-// Choosing the combination is the one time the screen DOES count presses: a
-// combination chosen blind, with a slip in it, is one its owner can never
-// unlock with. It still never draws which side was pressed.
-void testTheCombinationSetupCountsButNeverShowsTheOrder() {
-  Rendered first;
-  remoteui::ComboSetModel model;
-  model.detail = "Press the side keys eight times.";
-  model.entered = 3;
-  buildTheComboSet(first, model);
-  CHECK(drewText(first, "COMBINATION"));
-  CHECK(!drewText(first, "AGAIN"));
-  for (const char* order : {"LEFT", "RIGHT", "L", "R"}) {
-    CHECK(!drewText(first, order));
-  }
-
-  Rendered again;
-  model.confirming = true;
-  model.entered = 0;
-  model.detail = "Once more: the same eight.";
-  buildTheComboSet(again, model);
-  CHECK(drewText(again, "AGAIN"));
 }
 
 // F8 is the one button whose face is a word: the button IS that key, and no
@@ -14335,8 +14282,6 @@ int main() {
   testNowPlayingYieldsToAnythingActionable();
   testALongTitleIsCutNotWrapped();
   testTheStatusRowCanCarryTheUnlockMessage();
-  testTheUnlockingScreenSaysOneWord();
-  testTheCombinationSetupCountsButNeverShowsTheOrder();
   testTheHoldAndMicrophoneButtonsAreAlwaysLive();
   testThePairingCodeIsGrouped();
   testEveryForecastViewOffersAllThreeSegments();

@@ -161,15 +161,6 @@ bool sameNowPlaying(const NowPlaying& a, const NowPlaying& b) {
   return a.state == b.state && std::strcmp(a.title, b.title) == 0 && std::strcmp(a.artist, b.artist) == 0;
 }
 
-// --- The unlock combination ----------------------------------------------
-
-bool comboToPin(const SideKey* keys, const size_t count, char* out, const size_t size) {
-  if (keys == nullptr || out == nullptr || count != kComboLength || size < kComboLength + 1) return false;
-  for (size_t i = 0; i < count; ++i) out[i] = keys[i] == SideKey::Left ? '1' : '2';
-  out[count] = '\0';
-  return true;
-}
-
 // --- The microphone button -----------------------------------------------
 
 void encodeCommand(const MacCommand command, uint8_t out[kCommandLen]) {
