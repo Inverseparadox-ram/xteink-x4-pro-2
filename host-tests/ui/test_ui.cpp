@@ -10401,6 +10401,17 @@ void testTheRemoteStatusPages() {
   CHECK(drewText(claude, "2/3"));
   CHECK(claude.has(remoteui::ActionNextPage));
   CHECK(!claude.has(remoteui::ActionForget));
+  CHECK(claude.has(remoteui::ActionRefreshBoard));
+  CHECK(drewText(claude, "REFRESH"));
+
+  Rendered asking;
+  model.stamp = "Updated 14:32";
+  model.refreshing = true;
+  build(asking, model);
+  CHECK(drewText(asking, "ASKING"));
+  CHECK(drewText(asking, "Updated 14:32"));
+  model.stamp = "";
+  model.refreshing = false;
 
   Rendered mac;
   model.title = "MAC";
@@ -10410,6 +10421,7 @@ void testTheRemoteStatusPages() {
   build(mac, model);
   CHECK(mac.has(remoteui::ActionForget));
   CHECK(mac.has(remoteui::ActionNextPage));
+  CHECK(mac.has(remoteui::ActionRefreshBoard));
   CHECK(drewText(mac, "Waiting for the Mac..."));
 
   // On MAC, a row that is not running is a restart; a running one is not.
@@ -10457,6 +10469,7 @@ void testTheRemoteStatusPages() {
   model.helperConnected = false;
   build(away, model);
   CHECK(drewText(away, "The Mac helper is not connected. Run crossplay-unlock on the Mac, then open this page again."));
+  CHECK(!away.has(remoteui::ActionRefreshBoard));  // nobody to ask
 }
 
 void testEveryRemoteControlWinsItsOwnCentre() {

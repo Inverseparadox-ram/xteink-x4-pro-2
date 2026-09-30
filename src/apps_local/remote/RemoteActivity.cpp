@@ -503,6 +503,53 @@ void RemoteActivity::toggleMicrophones() {
 
 // --- Input ---------------------------------------------------------------
 
+// Callers hold the render lock: render() reads what this sets.
+void RemoteActivity::askForBoard(const int board) {
+  if (board < 0 || board > 1) return;
+  pullWanted_[board] = true;
+  pullSentAt_[board] = 0;
+}
+
+// Sends the pulls that are due, and notices their answers and their silence.
+void RemoteActivity::pullBoards() {
+  static constexpr uint32_t kAnswerMs = 8000;
+  static constexpr remote::StatusBoardId kIds[2] = {remote::StatusBoardId::Claude, remote::StatusBoardId::Services};
+  const remote::StatusAssembler& boards = remote::helper::statusBoards();
+  for (int b = 0; b < 2; ++b) {
+    const bool onScreen = phase_ == Phase::Remote && page_ == b + 1;
+    if (pullWanted_[b] && remote::helper::sendPull(kIds[b])) {
+      RenderLock lock(*this);
+      pullWanted_[b] = false;
+      pullSentAt_[b] = millis();
+      if (pullSentAt_[b] == 0) pullSentAt_[b] = 1;
+    }
+    const uint16_t arrived = boards.arrivals(kIds[b]);
+    if (arrived != boardsSeen_[b]) {
+      // Any complete board is an answer: the pull's, or a restart's progress.
+      RenderLock lock(*this);
+      boardsSeen_[b] = arrived;
+      pullSentAt_[b] = 0;
+      struct tm now = {};
+      if (halClock.localTime(now) && now.tm_year >= 120) {
+        clockapp::Civil civil;
+        civil.hour = static_cast<uint8_t>(now.tm_hour);
+        civil.minute = static_cast<uint8_t>(now.tm_min);
+        char clock[12];
+        clockapp::formatClock(civil, clock, sizeof(clock));
+        std::snprintf(boardStamp_[b], sizeof(boardStamp_[b]), "Updated %s", clock);
+      } else {
+        std::snprintf(boardStamp_[b], sizeof(boardStamp_[b]), "Updated just now");
+      }
+      if (onScreen) requestUpdate();
+    } else if (pullSentAt_[b] != 0 && millis() - pullSentAt_[b] > kAnswerMs) {
+      RenderLock lock(*this);
+      pullSentAt_[b] = 0;
+      std::snprintf(boardStamp_[b], sizeof(boardStamp_[b]), "The Mac did not answer");
+      if (onScreen) requestUpdate();
+    }
+  }
+}
+
 void RemoteActivity::loop() {
   // A connection appearing or dropping changes what the band says and whether
   // the pairing sentence is on screen, and nothing else will repaint it.
@@ -519,6 +566,11 @@ void RemoteActivity::loop() {
   // ask it straight away, so the padlock shows the Mac's real state.
   const bool helperNow = remote::helper::helperPresent();
   if (helperNow && !helperWasPresent_ && paired_ && !unlockBusy_) statusDueAt_ = millis() + 300;
+  // A list on screen when the helper (re)appears asks for itself again.
+  if (helperNow && !helperWasPresent_ && page_ != 0) {
+    RenderLock lock(*this);
+    askForBoard(page_ - 1);
+  }
   helperWasPresent_ = helperNow;
   pollChallenge();
   // A track change is the one thing the Mac pushes unprompted. The link
@@ -544,6 +596,7 @@ void RemoteActivity::loop() {
   // Pages 2 and 3. Drained on every page so nothing piles up, repainted only
   // when a list is on screen: the controls page shows none of it.
   if (remote::helper::takeStatus() && phase_ == Phase::Remote && page_ != 0) requestUpdate();
+  pullBoards();
   remote::MacState macNext;
   if (remote::helper::takeMacState(macNext)) {
     RenderLock lock(*this);
@@ -664,9 +717,17 @@ void RemoteActivity::loop() {
     case remoteui::ActionNextPage: {
       RenderLock lock(*this);
       page_ = (page_ + 1) % remoteui::kPageCount;
+      if (page_ != 0) askForBoard(page_ - 1);
       requestUpdate();
       break;
     }
+    case remoteui::ActionRefreshBoard:
+      if (page_ != 0) {
+        RenderLock lock(*this);
+        askForBoard(page_ - 1);
+        requestUpdate();
+      }
+      break;
     case remoteui::ActionForget: {
       RenderLock lock(*this);
       phase_ = Phase::Forget;
@@ -744,6 +805,8 @@ void RemoteActivity::render(RenderLock&&) {
                              : "No services listed. Edit services.txt beside the helper on the Mac.";
     model.offerForget = !claude;
     model.restartable = !claude;
+    model.stamp = boardStamp_[page_ - 1];
+    model.refreshing = pullWanted_[page_ - 1] || pullSentAt_[page_ - 1] != 0;
     remoteui::buildStatusPage(screen, model);
     what = claude ? "Remote claude" : "Remote mac";
   } else {

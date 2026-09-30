@@ -299,9 +299,16 @@ The arrow on the band steps through three pages: the controls, **CLAUDE** and
 **MAC**. Unpair moved off the band to make room and sits at the foot of MAC; it
 is used once per Mac, and the arrow every visit.
 
-Both pages are lists the Mac helper keeps current over a fourth encrypted
+Both pages are lists the Mac helper sends over a fourth encrypted
 characteristic, `6F1B0A06`, one row per write (`RemoteCore.h`, "Status
-boards"). A board is drawn only when its last row has arrived, so the page
+boards"). They are **pulled, not pushed**: the reader sends `[1, 4, board]`
+on the command characteristic when the page opens, when the helper reconnects
+while it is open, and on REFRESH at the foot of the page, and the helper
+answers with the whole board whether or not it changed. The reader counts
+complete boards per list (`StatusAssembler::arrivals`), so an unchanged answer
+still reads as an answer: the line above REFRESH says *Updated 14:32*, or *The
+Mac did not answer* after eight seconds. The helper sends unasked only while a
+restart the reader asked for is running. A board is drawn only when its last row has arrived, so the page
 never shows half of one list over half of another. Each row is a name, a detail
 line and one status word; *awaiting input* and *failed* are set in reverse,
 because those are the ones that want a person.

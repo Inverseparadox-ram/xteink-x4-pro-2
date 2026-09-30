@@ -102,6 +102,10 @@ bool sendCommand(MacCommand command);
 // False when the helper is not listening.
 bool sendRestart(uint8_t row, const char* title);
 
+// Asks the Mac for one board now. False when the helper is not listening; the
+// answer arrives through takeStatus() like any other board.
+bool sendPull(StatusBoardId board);
+
 // What the Mac last reported about itself. True only on a CHANGE, for the same
 // reason as takeNowPlaying(); reset to "not known" when the helper goes away,
 // so the microphone button never claims a state it can no longer be told.

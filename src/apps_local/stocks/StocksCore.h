@@ -73,6 +73,23 @@ int32_t sessionSeconds(Exchange exchange);
 // The symbol Yahoo's chart service knows it by: AAPL, RELIANCE.NS, SBIN.BO.
 std::string yahooSymbol(const Holding& holding);
 
+// Twelve Data's spelling: AAPL, BRK.B, and RELIANCE:NSE / RELIANCE:BSE for
+// India, the SYMBOL:EXCHANGE form its batch requests take.
+std::string twelveSymbol(const Holding& holding);
+
+// Seconds east of UTC for the exchange's own clock at `utc`: India is +5:30
+// all year; New York follows US daylight saving (second Sunday of March to
+// the first Sunday of November, 2am local).
+int32_t exchangeOffset(Exchange exchange, int64_t utc);
+
+// "2026-09-29 15:55:00" or "2026-09-29", read as UTC. False on anything else.
+bool parseUtcTime(const char* text, int64_t& out);
+
+// /Stocks/twelvedata.txt: the first line that is a plausible key (16-64
+// letters and digits), ignoring comments and blanks. "" when there is none.
+std::string parseKeyFile(const std::string& text);
+const char* sampleKeyFile();
+
 // A company name as the service spelled it, made safe to draw and to cache:
 // printable ASCII only (the reader's UI cuts have nothing else), one line,
 // at most `cap` characters.

@@ -5,6 +5,8 @@
 
 #include <cstdio>
 
+#include "StocksFetch.h"
+
 namespace stocks {
 namespace {
 
@@ -13,6 +15,7 @@ constexpr const char* kDir = "/.crosspoint/stocks";
 constexpr const char* kSpanPath = "/.crosspoint/stocks/span.txt";
 constexpr const char* kListDir = "/Stocks";
 constexpr const char* kListPath = "/Stocks/watchlist.txt";
+constexpr const char* kKeyPath = "/Stocks/twelvedata.txt";
 // A watchlist is a few hundred bytes; the cap only stops a wrong file (a
 // photo renamed, say) from being read into RAM whole.
 constexpr size_t kMaxFile = 32 * 1024;
@@ -90,6 +93,16 @@ void Store::load() {
   parseWatchlist(text, holdings_, problems_);
   LOG_INF(kTag, "watchlist: %d stocks, %d problems", static_cast<int>(holdings_.size()),
           static_cast<int>(problems_.size()));
+
+  // Read on every open, so a key copied onto the card works without a restart.
+  std::string keyText;
+  if (!readWholeFile(kKeyPath, keyText)) {
+    keyText.clear();
+    if (!writeAtomically(kKeyPath, sampleKeyFile())) LOG_ERR(kTag, "cannot write the sample key file");
+  }
+  const std::string key = parseKeyFile(keyText);
+  setTwelveDataKey(key);
+  LOG_INF(kTag, "Twelve Data: %s", key.empty() ? "no key, Yahoo only" : "key present");
 
   std::string span;
   if (readWholeFile(kSpanPath, span) && span.rfind("days", 0) == 0) {

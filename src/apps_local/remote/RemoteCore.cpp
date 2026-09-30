@@ -188,6 +188,12 @@ void encodeRestart(const uint8_t row, const char* title, uint8_t out[kRestartLen
   out[3] = serviceCheck(title);
 }
 
+void encodePull(const StatusBoardId board, uint8_t out[kPullLen]) {
+  out[0] = kMacLinkVersion;
+  out[1] = kCommandSendBoard;
+  out[2] = static_cast<uint8_t>(board);
+}
+
 bool decodeCommand(const uint8_t* data, const size_t len, MacCommand& out) {
   if (data == nullptr || len != kCommandLen || data[0] != kMacLinkVersion) return false;
   if (data[1] != static_cast<uint8_t>(MacCommand::MuteMicrophones) &&
@@ -283,6 +289,7 @@ bool StatusAssembler::feed(const uint8_t* data, const size_t len) {
     shown_[b] = StatusBoard{};
     shown_[b].known = true;
     expected_[b] = 0;
+    ++arrivals_[b];
     return true;
   }
   if (index >= count) return false;
@@ -306,11 +313,16 @@ bool StatusAssembler::feed(const uint8_t* data, const size_t len) {
   shown_[b] = pending_[b];
   shown_[b].known = true;
   expected_[b] = 0;
+  ++arrivals_[b];
   return true;
 }
 
 const StatusBoard& StatusAssembler::board(const StatusBoardId id) const {
   return shown_[id == StatusBoardId::Claude ? 0 : 1];
+}
+
+uint16_t StatusAssembler::arrivals(const StatusBoardId id) const {
+  return arrivals_[id == StatusBoardId::Claude ? 0 : 1];
 }
 
 void StatusAssembler::forget() {

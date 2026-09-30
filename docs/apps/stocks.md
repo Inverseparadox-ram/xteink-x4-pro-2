@@ -77,6 +77,37 @@ exchange time its price was true at, `Tue 29, 3:59 PM exchange time`, and adds
 
 ## Where the numbers come from
 
+Two sources, in order.
+
+### Twelve Data, when there is a key
+
+An official API with published limits. Put a key in
+**`/Stocks/twelvedata.txt`** (the app writes the file with instructions the
+first time it opens; the key goes on its own line, and it is read every time
+the app opens, so no restart). A free key from twelvedata.com covers **NASDAQ
+and NYSE**: 800 requests a day, 8 a minute, one per stock. **NSE and BSE need a
+paid plan**; on a free key Twelve Data answers them "not on your plan", the app
+remembers that until it is reopened with a different key, and they come from
+Yahoo instead.
+
+```
+https://api.twelvedata.com/time_series?symbol=AAPL,MSFT,RELIANCE:NSE&interval=5min&outputsize=90&timezone=UTC&apikey=...
+https://api.twelvedata.com/time_series?symbol=AAPL,MSFT&interval=1day&outputsize=12&timezone=UTC&apikey=...
+```
+
+Eight symbols per request, the free plan's per-minute limit. TODAY asks for 90
+five-minute bars: a session is 75 (NSE) or 78 (New York), so the answer always
+reaches into the session before, whose last bar is the previous close. The
+datetimes are asked for in UTC and placed on the exchange's own clock by
+`exchangeOffset()` (India +5:30; New York with US daylight saving). Twelve Data
+sends no company name, so the one already known from Yahoo is kept.
+
+A wrong key is reported by name ("Twelve Data refused the key in
+/Stocks/twelvedata.txt") when nothing else came back, and Twelve Data is not
+asked again until the app is reopened.
+
+### Yahoo, for the rest
+
 Yahoo Finance's chart endpoint, the only free source with no key that covers
 both New York and Mumbai:
 
@@ -119,18 +150,30 @@ It is **unofficial**. The day it changes shape, the app says so in words
 ("Yahoo sent a chart with no price in it") rather than drawing zeros, and a
 symbol Yahoo does not know comes back as Yahoo's own "No data found".
 
+It also **turns clients away with 429** when it likes, by address and by how
+the client looks rather than by any published limit. After a 429 the app
+leaves Yahoo alone for five minutes (Twelve Data, whose limit is per minute,
+for one) instead of asking again for every stock still missing, which only
+lengthens the refusal: one refused refresh is one request.
+
 ### TLS
 
-Verified against the DigiCert roots (`StocksRoots.h`: Global Root CA, G2, G3
-and High Assurance EV), which is who has issued Yahoo's certificates. If that
-changes, put a current bundle at **`/.crosspoint/stocks/roots.pem`** and it
-wins over the baked one; the failure screen names the file.
+Yahoo is verified against the DigiCert roots (`StocksRoots.h`: Global Root CA,
+G2, G3 and High Assurance EV), which is who has issued Yahoo's certificates.
+Twelve Data gets a broader bundle, because which CA its edge uses could not be
+checked when this was written: those DigiCert roots, the ISRG and GTS roots the
+firmware already carries, and Amazon, Starfield, USERTrust, SSL.com and
+GlobalSign R3 (`kExtraCaRoots`), joined once in PSRAM so none is stored twice.
+If either changes, put a current bundle at
+**`/.crosspoint/stocks/roots.pem`** and it wins over the baked ones; the
+failure screen names the file.
 
 ## On the card
 
 | | |
 | --- | --- |
 | `/Stocks/watchlist.txt` | the watchlist |
+| `/Stocks/twelvedata.txt` | optional Twelve Data key |
 | `/.crosspoint/stocks/<SYM>-today.txt`, `-days.txt` | the last series fetched, plain text |
 | `/.crosspoint/stocks/span.txt` | which side of the toggle was last used |
 | `/.crosspoint/stocks/roots.pem` | optional CA override |

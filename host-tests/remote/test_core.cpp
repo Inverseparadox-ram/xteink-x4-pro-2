@@ -295,6 +295,31 @@ static void testTheRestartFrameIsPinned() {
   CHECK(remote::serviceCheck("") == static_cast<uint8_t>(2166136261u & 0xFF), "empty title");
 }
 
+static void testThePullFrameIsPinnedAndEveryAnswerCounts() {
+  uint8_t frame[remote::kPullLen];
+  remote::encodePull(remote::StatusBoardId::Claude, frame);
+  CHECK(frame[0] == 1 && frame[1] == 0x04 && frame[2] == 1, "pull CLAUDE bytes pinned");
+  remote::encodePull(remote::StatusBoardId::Services, frame);
+  CHECK(frame[2] == 2, "pull MAC bytes pinned");
+
+  // The same list twice is still two answers: a pull answered with nothing
+  // new must not look unanswered.
+  remote::StatusAssembler boards;
+  remote::StatusRow row;
+  row.status = remote::StatusCode::Running;
+  std::snprintf(row.title, sizeof(row.title), "%s", "Immich");
+  uint8_t bytes[remote::kStatusFrameMax];
+  const size_t len = remote::encodeStatusRow(remote::StatusBoardId::Services, 1, 0, row, bytes, sizeof(bytes));
+  CHECK(boards.arrivals(remote::StatusBoardId::Services) == 0, "nothing arrived yet");
+  boards.feed(bytes, len);
+  boards.feed(bytes, len);
+  CHECK(boards.arrivals(remote::StatusBoardId::Services) == 2, "an unchanged board still counts");
+  CHECK(boards.arrivals(remote::StatusBoardId::Claude) == 0, "the other board is its own count");
+  const size_t empty = remote::encodeStatusRow(remote::StatusBoardId::Claude, 0, 0, row, bytes, sizeof(bytes));
+  boards.feed(bytes, empty);
+  CHECK(boards.arrivals(remote::StatusBoardId::Claude) == 1, "an empty board is an answer");
+}
+
 int main() {
   testOnlyTheProfileThatKnowsTheNumbersPrintsThem();
   testBrowserSeekTypesTheYouTubeKeys();
@@ -307,6 +332,7 @@ int main() {
   testControlCharactersNeverReachTheScreen();
   testTheStatusBoardsAssembleWholeOrNotAtAll();
   testTheRestartFrameIsPinned();
+  testThePullFrameIsPinnedAndEveryAnswerCounts();
   std::printf("%s  remote core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;
 }

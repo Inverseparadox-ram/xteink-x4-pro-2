@@ -195,6 +195,8 @@ bool StocksActivity::refreshBatch() {
       missing_.push_back(static_cast<int>(i));
       continue;
     }
+    // Twelve Data's series carry no company name; keep the one already known.
+    if (results[k].name.empty()) results[k].name = series_[i].name;
     store_.writeCache(holdings[i], results[k]);
     RenderLock lock(*this);
     series_[i] = std::move(results[k]);
@@ -239,6 +241,7 @@ void StocksActivity::refreshStep() {
   std::string message;
   const stocks::Span span = store_.span();
   if (stocks::fetchSeries(holdings[i], span, fresh, message)) {
+    if (fresh.name.empty()) fresh.name = series_[i].name;
     store_.writeCache(holdings[i], fresh);
     RenderLock lock(*this);
     series_[i] = std::move(fresh);

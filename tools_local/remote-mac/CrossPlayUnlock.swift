@@ -56,6 +56,9 @@ enum Wire {
     // [version, 0x03, row, check]: restart the service on MAC-page row `row`,
     // whose title's FNV-1a low byte is `check` (RemoteCore's serviceCheck).
     static let commandRestart: UInt8 = 0x03
+    // [version, 0x04, board]: send that board now. The boards are pulled; the
+    // reader asks when a page opens and on REFRESH.
+    static let commandSendBoard: UInt8 = 0x04
     static let flagMicrophonesMuted: UInt8 = 0x01
 
     static let version: UInt8 = 1
@@ -1403,12 +1406,11 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private var nowPlayingCharacteristic: CBCharacteristic?
     private var macStateCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
-    // What each board last sent; nil after a reconnect, so the reader is told
-    // everything again.
+    // What each board last sent, so a restart's progress goes out only when
+    // it changed. A pull is answered whatever this holds.
     private var sentBoards: [UInt8: [Data]] = [:]
-    private var claudeTimer: Timer?
-    private var servicesTimer: Timer?
-    private var servicesRows: [StatusRow]?
+    // Pulls that came before there was a status characteristic to answer on.
+    private var pendingPulls: Set<UInt8> = []
     private let checkQueue = DispatchQueue(label: "crossplay.services")
     private let microphones = Microphones()
     private var lastMacState: Data?
@@ -1425,16 +1427,8 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
         microphones.onChange = { [weak self] in self?.sendMacState() }
-        // Claude sessions change on a hook, so the file is cheap to look at
-        // often; the services checks spawn processes, so they run less often
-        // and off the main thread.
-        claudeTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            self?.sendBoard(Wire.boardClaude, ClaudeSessions.rows())
-        }
-        servicesTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.refreshServices()
-        }
-        refreshServices()
+        // No timers for the CLAUDE and MAC boards: the reader pulls them
+        // (handleCommand), so nothing is checked or sent while nobody looks.
         let centre = DistributedNotificationCenter.default()
         for source in NowPlaying.sources {
             observers.append(centre.addObserver(forName: NSNotification.Name(source.notification), object: nil,
@@ -1473,28 +1467,50 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         lastMacState = frame
     }
 
-    private func refreshServices() {
+    // The services checks spawn processes, so they run off the main thread.
+    // `force` is a pull: answered even when nothing changed, because the
+    // reader is waiting for an answer.
+    private func refreshServices(force: Bool = false) {
         checkQueue.async { [weak self] in
             let rows = Services.rows()
             DispatchQueue.main.async {
-                self?.servicesRows = rows
-                self?.sendBoard(Wire.boardServices, rows)
+                self?.sendBoard(Wire.boardServices, rows, force: force)
             }
         }
     }
 
-    // A board goes out only when it changed, row by row, with responses so a
-    // failed write is logged and the board is sent again next time.
-    private func sendBoard(_ board: UInt8, _ rows: [StatusRow]) {
+    private func answerPull(_ board: UInt8) {
+        switch board {
+        case Wire.boardClaude:
+            log("the reader asked for the CLAUDE board")
+            sendBoard(Wire.boardClaude, ClaudeSessions.rows(), force: true)
+        case Wire.boardServices:
+            log("the reader asked for the MAC board")
+            refreshServices(force: true)
+        default:
+            log("the reader asked for board \(board), which does not exist")
+        }
+    }
+
+    // Row by row, with responses so a failed write is logged. Unforced (a
+    // restart's progress) it goes out only when it changed.
+    private func sendBoard(_ board: UInt8, _ rows: [StatusRow], force: Bool = false) {
         let frames = statusFrames(board: board, rows: rows)
-        guard frames != sentBoards[board] else { return }
-        guard let characteristic = statusCharacteristic, let peripheral = reader else { return }
+        guard force || frames != sentBoards[board] else { return }
+        guard let characteristic = statusCharacteristic, let peripheral = reader else {
+            if force { pendingPulls.insert(board) }
+            return
+        }
         for frame in frames { peripheral.writeValue(frame, for: characteristic, type: .withResponse) }
         sentBoards[board] = frames
     }
 
     private func handleCommand(_ frame: Data) {
         let bytes = [UInt8](frame)
+        if bytes.count == 3, bytes[0] == Wire.macLinkVersion, bytes[1] == Wire.commandSendBoard {
+            answerPull(bytes[2])
+            return
+        }
         if bytes.count == 4, bytes[0] == Wire.macLinkVersion, bytes[1] == Wire.commandRestart {
             Services.restart(row: Int(bytes[2]), check: bytes[3]) { [weak self] in self?.refreshServices() }
             return
@@ -1596,10 +1612,12 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             if characteristic.uuid == Wire.response { responseCharacteristic = characteristic }
             if characteristic.uuid == Wire.command { peripheral.setNotifyValue(true, for: characteristic) }
             if characteristic.uuid == Wire.status {
+                // Nothing is sent until the reader asks for it.
                 statusCharacteristic = characteristic
                 sentBoards = [:]
-                sendBoard(Wire.boardClaude, ClaudeSessions.rows())
-                if let rows = servicesRows { sendBoard(Wire.boardServices, rows) }
+                let waiting = pendingPulls
+                pendingPulls = []
+                for board in waiting.sorted() { answerPull(board) }
             }
             if characteristic.uuid == Wire.macState {
                 macStateCharacteristic = characteristic

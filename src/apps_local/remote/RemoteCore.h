@@ -110,6 +110,12 @@ inline constexpr size_t kRestartLen = 4;
 uint8_t serviceCheck(const char* title);
 void encodeRestart(uint8_t row, const char* title, uint8_t out[kRestartLen]);
 
+// "Send me this board now": [version, 0x04, board]. The boards are PULLED:
+// the helper sends one when the reader asks (a page opening, REFRESH) and
+// otherwise only while a restart the reader asked for is running.
+inline constexpr uint8_t kCommandSendBoard = 0x04;
+inline constexpr size_t kPullLen = 3;  // encodePull(), beside the boards below
+
 // What the Mac reports about itself. One bit for now, a byte so it can grow
 // without a new characteristic.
 struct MacState {
@@ -206,6 +212,8 @@ inline constexpr size_t kStatusFrameMax = 6 + kStatusTitleMax + 1 + kStatusDetai
 
 enum class StatusBoardId : uint8_t { Claude = 1, Services = 2 };
 
+void encodePull(StatusBoardId board, uint8_t out[kPullLen]);
+
 enum class StatusCode : uint8_t {
   Unknown = 0,
   InProcess = 1,      // Claude is working on it
@@ -244,12 +252,16 @@ class StatusAssembler {
  public:
   bool feed(const uint8_t* data, size_t len);
   const StatusBoard& board(StatusBoardId id) const;
+  // Counts every complete board of `id`, changed or not, so a pull that is
+  // answered with the same list still reads as answered.
+  uint16_t arrivals(StatusBoardId id) const;
   void forget();  // the helper went away: nothing is known any more
 
  private:
   StatusBoard shown_[2];
   StatusBoard pending_[2];
   uint8_t expected_[2] = {0, 0};  // the next index each pending board wants
+  uint16_t arrivals_[2] = {0, 0};
 };
 
 }  // namespace remote

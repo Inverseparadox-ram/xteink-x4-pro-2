@@ -112,6 +112,16 @@ class RemoteActivity final : public Activity {
   char restartTitle_[remote::kStatusTitleMax + 1] = "";
   char restartDetail_[remote::kStatusDetailMax + 24] = "";
 
+  // Pages 2 and 3 are pulled: a page opening, REFRESH or the helper coming
+  // back asks for its board, and nothing arrives otherwise. Per board, [0] is
+  // CLAUDE and [1] MAC.
+  void pullBoards();
+  void askForBoard(int board);
+  bool pullWanted_[2] = {false, false};
+  uint32_t pullSentAt_[2] = {0, 0};  // 0 = nothing outstanding
+  uint16_t boardsSeen_[2] = {0, 0};  // StatusAssembler::arrivals() last read
+  char boardStamp_[2][40] = {};
+
   // Whether the helper was subscribed at the last loop, so its arrival --
   // the app opening, the Mac reconnecting -- can trigger a status check.
   bool helperWasPresent_ = false;

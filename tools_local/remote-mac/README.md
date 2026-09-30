@@ -177,17 +177,26 @@ That adds `crossplay-unlock claude-hook` to `~/.claude/settings.json` for
 UserPromptSubmit, PreToolUse (AskUserQuestion and ExitPlanMode only),
 PostToolUse, Notification, Stop and SessionEnd, keeping everything already in
 the file and a copy of it as `settings.json.crossplay-backup`. Each event
-rewrites one line of `claude-sessions.json` beside the ledger; the agent reads
-it every three seconds. A session is *awaiting input* when Claude asks a
+rewrites one line of `claude-sessions.json` beside the ledger, and the agent
+reads it when the reader asks (below). A session is *awaiting input* when Claude asks a
 question, wants a permission or waits on a plan; *completed* when its turn
 ends; *failed* when its `claude` process disappears mid-turn. Completed rows
 leave after a day, failed after two hours, closed sessions at once. The title
 is the one Claude Code gave the session, else its first prompt. Sessions
 already open before the setup appear from their next prompt.
 
+Both pages are **pulled**: the reader asks for a list when the page opens,
+when the Mac helper reconnects while it is open, and when REFRESH is tapped
+(`[1, 4, board]` on the command characteristic), and the helper answers with
+the whole list, changed or not. Nothing is checked or sent while nobody is
+looking. The one exception is a restart the reader asked for, whose progress
+(*restarting*, *asking Claude*, the answer) the helper sends as it happens.
+The page says when it was last updated, or that the Mac did not answer within
+eight seconds.
+
 **MAC** lists your own background services from `services.txt` beside the
 ledger (`~/Library/Application Support/CrossPlayUnlock/`), one per line as
-`NAME | CHECK | START`, checked every thirty seconds. A check is
+`NAME | CHECK | START`, checked when the reader asks. A check is
 `launchd <label>`, `process <text>` (a command line containing it),
 `docker <container>`, `http <url>` or `self`. START is optional: the shell
 command that starts the service again (see below). The file is written on

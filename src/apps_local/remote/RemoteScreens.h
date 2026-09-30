@@ -28,7 +28,7 @@ namespace remoteui {
 namespace fui = freeink::ui;
 
 // Chess 1-4, link 200s, Hacker News 300s, Instapaper 320s, Notes 340s,
-// Weather 360s. The remote takes the 380s.
+// Weather 360s. The remote takes the 380s, and 470 once those ran out.
 enum : fui::ActionId {
   ActionPlayPause = 380,
   ActionNext = 381,
@@ -50,6 +50,7 @@ enum : fui::ActionId {
   ActionRestartConfirm = 397,
   ActionRestartCancel = 399,
   ActionPairDone = 398,
+  ActionRefreshBoard = 470,
 };
 
 // Which of the three faces the unlock button is wearing. It is the LAST
@@ -120,7 +121,7 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model);
 // Three pages, stepped through by the arrow on the band: REMOTE, CLAUDE (what
 // the Claude Code sessions on the Mac are doing) and MAC (whether its own
 // background services are up). Only the first has controls; the other two are
-// lists the helper keeps current, and they say so when there is no helper to
+// lists pulled from the helper (REFRESH), and they say so when there is no helper to
 // ask rather than drawing an empty page that looks like "nothing running".
 
 inline constexpr int kPageCount = 3;
@@ -139,6 +140,11 @@ struct StatusPageModel {
   // Rows that are not running can be tapped (the MAC page): ActionRestartRow
   // with the row's index as the value.
   bool restartable = false;
+  // The board is pulled, never pushed: REFRESH asks for it again. `stamp` is
+  // the line above the button ("Updated 14:32"); `refreshing` is a pull the
+  // Mac has not answered yet.
+  const char* stamp = "";
+  bool refreshing = false;
 };
 
 void buildStatusPage(toybox::Screen& screen, const StatusPageModel& model);

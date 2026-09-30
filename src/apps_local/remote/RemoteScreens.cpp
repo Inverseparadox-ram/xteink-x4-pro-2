@@ -379,19 +379,39 @@ void buildStatusPage(toybox::Screen& screen, const StatusPageModel& model) {
   const int16_t smallH = target.lineHeight(toybox::kSmallFont);
   int16_t bottom = static_cast<int16_t>(device.height - toybox::kMargin);
 
-  if (model.offerForget) {
-    // Unpair, at the foot of the MAC page: smaller than a primary action and
-    // outlined, because it undoes the pairing.
-    const int16_t w = static_cast<int16_t>(width / 2);
+  // The foot: REFRESH, with Unpair beside it on the MAC page. Unpair is
+  // outlined because it undoes the pairing; REFRESH is the page's one primary
+  // control, since nothing reaches this page unless it is asked for.
+  {
     const int16_t y = static_cast<int16_t>(bottom - kFooterHeight);
-    fui::ButtonProps forget;
-    forget.icon = fui::bitmapFromIcon(icon_remote_unlink_32);
-    forget.iconSize = 32;
-    forget.label = "UNPAIR";
-    forget.action = ActionForget;
-    forget.styles = toybox::rowStyles();
-    screen.button(forget, fui::makeRect(static_cast<int16_t>(toybox::kMargin + (width - w) / 2), y, w, kFooterHeight));
+    const int16_t half = static_cast<int16_t>((width - gutter) / 2);
+    const bool connected = model.helperConnected;
+    int16_t refreshX = static_cast<int16_t>(toybox::kMargin + (width - half) / 2);
+    if (model.offerForget) {
+      fui::ButtonProps forget;
+      forget.icon = fui::bitmapFromIcon(icon_remote_unlink_32);
+      forget.iconSize = 32;
+      forget.label = "UNPAIR";
+      forget.action = ActionForget;
+      forget.styles = toybox::rowStyles();
+      screen.button(forget, fui::makeRect(toybox::kMargin, y, half, kFooterHeight));
+      refreshX = static_cast<int16_t>(toybox::kMargin + width - half);
+    }
+    if (connected) {
+      fui::ButtonProps refresh;
+      refresh.icon = fui::bitmapFromIcon(icon_weather_refresh_32);
+      refresh.iconSize = 32;
+      refresh.label = model.refreshing ? "ASKING" : "REFRESH";
+      refresh.action = ActionRefreshBoard;
+      screen.button(refresh, fui::makeRect(refreshX, y, half, kFooterHeight));
+    }
     bottom = static_cast<int16_t>(y - gutter);
+    if (connected && model.stamp != nullptr && model.stamp[0] != '\0') {
+      bottom = static_cast<int16_t>(bottom - smallH);
+      target.text(fui::makeRect(toybox::kMargin, bottom, width, smallH), model.stamp,
+                  plain(toybox::kSmallFont, fui::TextAlign::Center, fui::Color::DarkGray));
+      bottom = static_cast<int16_t>(bottom - gutter);
+    }
   }
 
   int16_t y = static_cast<int16_t>(kBodyTop);

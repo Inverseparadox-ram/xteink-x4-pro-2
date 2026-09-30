@@ -359,6 +359,15 @@ bool sendRestart(const uint8_t row, const char* title) {
   return true;
 }
 
+bool sendPull(const StatusBoardId board) {
+  if (commandOut == nullptr || !commandSubscribed) return false;
+  uint8_t frame[kPullLen];
+  encodePull(board, frame);
+  commandOut->setValue(frame, sizeof(frame));
+  commandOut->notify();
+  return true;
+}
+
 bool takeMacState(MacState& out) {
   uint8_t frame[kMacStateLen];
   taskENTER_CRITICAL(&nowLock);
@@ -438,13 +447,23 @@ bool sendCommand(MacCommand) { return false; }
 bool sendRestart(uint8_t, const char*) { return false; }
 bool takeMacState(MacState&) { return false; }
 
-// CROSSPOINT_SIM_STATUS=1 hands pages 2 and 3 a plausible pair of boards, so
-// they can be rendered in a simulator with no Mac to describe.
-bool takeStatus() {
-  static bool given = false;
+// CROSSPOINT_SIM_STATUS=1 answers every pull with a plausible board, so pages
+// 2 and 3 can be rendered in a simulator with no Mac to describe.
+namespace {
+uint8_t simPulls = 0;  // bit per board asked for
+}  // namespace
+
+bool sendPull(const StatusBoardId board) {
   const char* env = std::getenv("CROSSPOINT_SIM_STATUS");
-  if (given || env == nullptr || env[0] != '1') return false;
-  given = true;
+  if (env == nullptr || env[0] != '1') return false;
+  simPulls = static_cast<uint8_t>(simPulls | (1u << static_cast<uint8_t>(board)));
+  return true;
+}
+
+bool takeStatus() {
+  if (simPulls == 0) return false;
+  const uint8_t asked = simPulls;
+  simPulls = 0;
   struct Seed {
     StatusBoardId board;
     StatusCode code;
@@ -463,6 +482,7 @@ bool takeStatus() {
       {StatusBoardId::Services, StatusCode::Running, "Remote unlock", "this helper"},
   };
   for (const StatusBoardId board : {StatusBoardId::Claude, StatusBoardId::Services}) {
+    if ((asked & (1u << static_cast<uint8_t>(board))) == 0) continue;
     uint8_t count = 0;
     for (const Seed& seed : kSeeds) count = static_cast<uint8_t>(count + (seed.board == board ? 1 : 0));
     uint8_t index = 0;

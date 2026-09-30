@@ -229,6 +229,116 @@ std::string yahooSymbol(const Holding& holding) {
   return out;
 }
 
+std::string twelveSymbol(const Holding& holding) {
+  switch (holding.exchange) {
+    case Exchange::Nse:
+      return holding.symbol + ":NSE";
+    case Exchange::Bse:
+      return holding.symbol + ":BSE";
+    case Exchange::Nasdaq:
+    case Exchange::Nyse:
+      break;
+  }
+  return holding.symbol;
+}
+
+namespace {
+
+// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's).
+int64_t daysFromCivil(int64_t y, const unsigned m, const unsigned d) {
+  y -= m <= 2 ? 1 : 0;
+  const int64_t era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = static_cast<unsigned>(y - era * 400);
+  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
+// The day of the month of the nth Sunday (1-based) of month m in year y.
+unsigned nthSunday(const int64_t y, const unsigned m, const unsigned n) {
+  const int64_t first = daysFromCivil(y, m, 1);
+  const unsigned weekday = static_cast<unsigned>(((first % 7) + 11) % 7);  // 0 = Sunday; 1970-01-01 was a Thursday
+  return 1 + (7 - weekday) % 7 + 7 * (n - 1);
+}
+
+}  // namespace
+
+int32_t exchangeOffset(const Exchange exchange, const int64_t utc) {
+  if (exchange == Exchange::Nse || exchange == Exchange::Bse) return 19800;
+  // Which year it is in New York barely matters at the edges: both switches
+  // happen at 2am local, hours away from any New Year.
+  const int64_t days = (utc - 5 * 3600) / 86400 - ((utc - 5 * 3600) % 86400 < 0 ? 1 : 0);
+  const int64_t z = days + 719468;
+  const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const unsigned doe = static_cast<unsigned>(z - era * 146097);
+  const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const unsigned mp = (5 * doy + 2) / 153;
+  const unsigned month = mp < 10 ? mp + 3 : mp - 9;
+  const int64_t year = static_cast<int64_t>(yoe) + era * 400 + (month <= 2 ? 1 : 0);
+  // 2am EST is 07:00 UTC; 2am EDT is 06:00 UTC.
+  const int64_t start = daysFromCivil(year, 3, nthSunday(year, 3, 2)) * 86400 + 7 * 3600;
+  const int64_t end = daysFromCivil(year, 11, nthSunday(year, 11, 1)) * 86400 + 6 * 3600;
+  return utc >= start && utc < end ? -4 * 3600 : -5 * 3600;
+}
+
+bool parseUtcTime(const char* text, int64_t& out) {
+  if (text == nullptr) return false;
+  const auto digits = [&](const size_t at, const size_t count, unsigned& value) {
+    value = 0;
+    for (size_t i = at; i < at + count; ++i) {
+      if (text[i] < '0' || text[i] > '9') return false;
+      value = value * 10 + static_cast<unsigned>(text[i] - '0');
+    }
+    return true;
+  };
+  unsigned y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
+  if (!digits(0, 4, y) || text[4] != '-' || !digits(5, 2, mo) || text[7] != '-' || !digits(8, 2, d)) return false;
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  if (text[10] != '\0') {
+    if (text[10] != ' ' || !digits(11, 2, h) || text[13] != ':' || !digits(14, 2, mi)) return false;
+    if (text[16] == ':' && !digits(17, 2, s)) return false;
+    if (h > 23 || mi > 59 || s > 60) return false;
+  }
+  out = daysFromCivil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s;
+  return true;
+}
+
+std::string parseKeyFile(const std::string& text) {
+  size_t at = 0;
+  while (at < text.size()) {
+    size_t end = text.find('\n', at);
+    if (end == std::string::npos) end = text.size();
+    std::string line = text.substr(at, end - at);
+    at = end + 1;
+    const size_t hash = line.find('#');
+    if (hash != std::string::npos) line.resize(hash);
+    size_t first = 0;
+    while (first < line.size() && (line[first] == ' ' || line[first] == '\t')) ++first;
+    size_t last = line.size();
+    while (last > first && (line[last - 1] == ' ' || line[last - 1] == '\t' || line[last - 1] == '\r')) --last;
+    if (last == first) continue;
+    const std::string key = line.substr(first, last - first);
+    bool plausible = key.size() >= 16 && key.size() <= 64;
+    for (const char c : key) {
+      if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) plausible = false;
+    }
+    if (plausible) return key;
+  }
+  return std::string();
+}
+
+const char* sampleKeyFile() {
+  return "# Stocks: a Twelve Data API key, on its own line below this comment.\n"
+         "#\n"
+         "# A free key (twelvedata.com, no card needed) covers NASDAQ and NYSE:\n"
+         "# 800 requests a day, 8 a minute, and each stock is one request. NSE\n"
+         "# and BSE need a paid plan; without one they keep coming from Yahoo.\n"
+         "#\n"
+         "# With no key, every price comes from Yahoo, which sometimes refuses.\n"
+         "\n";
+}
+
 std::string cleanName(const char* text, const size_t cap) {
   std::string out;
   if (text == nullptr) return out;

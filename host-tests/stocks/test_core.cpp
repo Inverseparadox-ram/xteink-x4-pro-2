@@ -323,8 +323,48 @@ static void testCache() {
   CHECK(parseSeries(serializeSeries(sneaky), backSneaky) && near(backSneaky.price, 3012.35), "newline in name");
 }
 
+void testTwelveData() {
+  Holding h;
+  h.symbol = "AAPL";
+  h.exchange = Exchange::Nasdaq;
+  CHECK(twelveSymbol(h) == "AAPL", "US symbols as listed");
+  h.symbol = "BRK.B";
+  h.exchange = Exchange::Nyse;
+  CHECK(twelveSymbol(h) == "BRK.B", "class shares keep their dot");
+  h.symbol = "RELIANCE";
+  h.exchange = Exchange::Nse;
+  CHECK(twelveSymbol(h) == "RELIANCE:NSE", "NSE as SYMBOL:EXCHANGE");
+  h.exchange = Exchange::Bse;
+  CHECK(twelveSymbol(h) == "RELIANCE:BSE", "BSE as SYMBOL:EXCHANGE");
+
+  int64_t t = 0;
+  CHECK(parseUtcTime("1970-01-01", t) && t == 0, "the epoch");
+  CHECK(parseUtcTime("2026-09-29 15:55:00", t) && t == 1790697300, "a five-minute bar");
+  CHECK(parseUtcTime("2026-09-29 15:55", t) && t == 1790697300, "seconds optional");
+  CHECK(parseUtcTime("2024-02-29", t) && t == 1709164800, "a leap day");
+  CHECK(!parseUtcTime("2026-13-01", t), "month 13 refused");
+  CHECK(!parseUtcTime("2026-09-29T15:55:00", t), "ISO T refused");
+  CHECK(!parseUtcTime("29/09/2026", t), "other orders refused");
+  CHECK(!parseUtcTime(nullptr, t), "null refused");
+
+  // 2026: DST from Sun 8 Mar 07:00 UTC to Sun 1 Nov 06:00 UTC.
+  int64_t at = 0;
+  parseUtcTime("2026-03-08 06:59:59", at);
+  CHECK(exchangeOffset(Exchange::Nasdaq, at) == -5 * 3600, "EST until the March switch");
+  parseUtcTime("2026-03-08 07:00:00", at);
+  CHECK(exchangeOffset(Exchange::Nasdaq, at) == -4 * 3600, "EDT from 2am local");
+  parseUtcTime("2026-11-01 05:59:59", at);
+  CHECK(exchangeOffset(Exchange::Nyse, at) == -4 * 3600, "EDT until the November switch");
+  parseUtcTime("2026-11-01 06:00:00", at);
+  CHECK(exchangeOffset(Exchange::Nyse, at) == -5 * 3600, "EST from 2am local");
+  parseUtcTime("2027-01-01 03:00:00", at);
+  CHECK(exchangeOffset(Exchange::Nasdaq, at) == -5 * 3600, "New Year's night");
+  CHECK(exchangeOffset(Exchange::Nse, at) == 19800, "India is +5:30 all year");
+}
+
 int main() {
   testWatchlist();
+  testTwelveData();
   testSymbols();
   testSeries();
   testWorth();

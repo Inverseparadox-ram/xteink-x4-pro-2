@@ -3,6 +3,7 @@
 // The card side of Stocks.
 //
 //   /Stocks/watchlist.txt                    the stocks, written by a person
+//   /Stocks/twelvedata.txt                   optional Twelve Data API key
 //   /.crosspoint/stocks/<SYM>-<span>.txt     the last series fetched for each
 //   /.crosspoint/stocks/span.txt             TODAY or DAYS, as last left
 //   /.crosspoint/stocks/roots.pem            optional CA override (StocksFetch)
