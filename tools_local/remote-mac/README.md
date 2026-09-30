@@ -225,9 +225,11 @@ the service's line in `services.txt` at it:
   started it before (a login item, a `&` in a script) first, or there will be
   two.
 - `--app` keeps an app open (`open -W -a`), so quitting it reopens it.
-- `--docker` sets the container's restart policy to `unless-stopped`, so Docker
-  restarts it when it dies and when Docker starts. No launchd agent; Docker
-  Desktop itself has to be set to start at login.
+- `--docker` sets the container's restart policy to `unless-stopped`, so the
+  engine restarts it when it dies and when the engine starts. **OrbStack and
+  Docker Desktop both work**; the helper uses OrbStack's `docker`
+  (`~/.orbstack/bin`) when OrbStack is installed. No launchd agent: OrbStack
+  (Settings > Start at login) or Docker Desktop has to start at login itself.
 - `--launchd` adopts a job that already exists, for the restart button below.
 
 Agents are `~/Library/LaunchAgents/com.crossplay.svc.<name>.plist`, and their
@@ -238,9 +240,16 @@ agent and the line.
 *failed* or *unknown* can be tapped; the reader asks for a confirmation, then
 sends the helper the row and a check byte of its name (so a list that changed
 in the meantime cannot restart the wrong thing). The helper runs the line's
-START, or for `launchd` and `docker` lines one it knows
-(`launchctl kickstart -k`, falling back to `launchctl bootstrap`;
-`docker start`). The row reads *restarting* meanwhile, and *restarted* if it is
+START, or for `launchd` and `docker` lines one it knows:
+`launchctl kickstart -k`, falling back to `launchctl bootstrap`; and for
+`docker`, the engine first if it is down (`orb start` for OrbStack, else the
+app is opened; up to two minutes for it to answer), then the container, and
+when it belongs to a Compose project (Immich's does) every container in that
+project, so the server does not come back to a stopped database. Every
+recipe runs with a terminal's PATH (launchd's has no `docker`), and a START of
+your own can call `crossplay_engine_up` for the same engine step. A `docker`
+row reads *OrbStack off* when the engine is down and *no container NAME* when
+the name is wrong. The row reads *restarting* meanwhile, and *restarted* if it is
 back eight seconds later; the reader sees each when it pulls (REFRESH).
 
 **3. The Service doctor.** If the restart did not bring it back, the helper

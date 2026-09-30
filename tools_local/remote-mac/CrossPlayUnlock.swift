@@ -932,13 +932,15 @@ final class Services {
     # CHECK is one of:
     #   launchd <label>      a launchd job:    launchd com.example.agent
     #   process <text>       a running process whose command line contains <text>
-    #   docker <container>   a Docker container
+    #   docker <container>   a Docker container (OrbStack or Docker Desktop)
     #   http <url>           something answering over HTTP
     #   self                 this helper
     #
     # START is optional: the shell command that starts it again, run when you
-    # tap RESTART on the reader. launchd and docker lines need none (it is
-    # `launchctl kickstart` / `docker start`). If the restart does not bring it
+    # tap RESTART on the reader. launchd and docker lines need none: launchd is
+    # `launchctl kickstart`; docker starts OrbStack (or Docker Desktop) if it is
+    # down, then the container and the rest of its Compose project. A START
+    # can call crossplay_engine_up itself. If the restart does not bring it
     # back, Claude Code looks into it in the Service doctor chat.
     #
     # Better than a restart button: `crossplay-unlock adopt` makes macOS keep a
@@ -948,7 +950,7 @@ final class Services {
     # `crossplay-unlock services` prints what each line finds right now.
 
     Ambient tasks | process ambient
-    Immich        | http http://localhost:2283/api/server/ping
+    Immich        | docker immich_server
     Voice typing  | process voice
     Wake TV       | process wake
     Remote unlock | self
@@ -1008,9 +1010,62 @@ final class Services {
         try? kept.joined(separator: "\n").data(using: .utf8)?.write(to: path)
     }
 
+    // OrbStack first: it is what runs the containers when it is installed, and
+    // its CLI is not where Docker Desktop's is. launchd's PATH has neither.
     static func docker() -> String? {
-        ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/Applications/Docker.app/Contents/Resources/bin/docker"]
-            .first { FileManager.default.isExecutableFile(atPath: $0) }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = ["\(home)/.orbstack/bin/docker", "/Applications/OrbStack.app/Contents/MacOS/xbin/docker",
+                          "/usr/local/bin/docker", "/opt/homebrew/bin/docker",
+                          "/Applications/Docker.app/Contents/Resources/bin/docker"]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    // Which app runs the Docker engine here, for the words on the reader.
+    static var engineName: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if FileManager.default.fileExists(atPath: "/Applications/OrbStack.app") ||
+            FileManager.default.fileExists(atPath: "\(home)/.orbstack") {
+            return "OrbStack"
+        }
+        return "Docker"
+    }
+
+    // What every recipe runs first. The PATH a terminal has, and for anything
+    // that uses docker, the engine brought up when it is not: OrbStack
+    // (`orb start`, else opening the app) or Docker Desktop, then up to two
+    // minutes for it to answer.
+    static let shellPrelude = #"""
+    export PATH="$HOME/.orbstack/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+    crossplay_engine_up() {
+      docker info >/dev/null 2>&1 && return 0
+      if [ -d /Applications/OrbStack.app ] || [ -d "$HOME/.orbstack" ]; then
+        echo "starting OrbStack"; orb start >/dev/null 2>&1 || open -ga OrbStack
+      elif [ -d /Applications/Docker.app ]; then
+        echo "starting Docker Desktop"; open -ga Docker
+      fi
+      i=0
+      until docker info >/dev/null 2>&1; do
+        i=$((i + 2)); [ $i -gt 120 ] && { echo "the Docker engine did not come up"; return 1; }
+        sleep 2
+      done
+    }
+    """#
+
+    // Starts a container and, when it belongs to a Compose project (Immich
+    // does: server, machine learning, Redis, Postgres), every container of
+    // that project, so the server does not come back to a missing database.
+    static func dockerStart(_ container: String) -> String {
+        let quoted = "'" + container.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return """
+        crossplay_engine_up || exit 1
+        project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' \(quoted) 2>/dev/null)
+        if [ -n "$project" ]; then
+          echo "starting compose project $project"
+          docker ps -aq --filter "label=com.docker.compose.project=$project" | xargs docker start
+        else
+          docker start \(quoted)
+        fi
+        """
     }
 
     // How a line is started again: its own START, else what its CHECK implies.
@@ -1025,8 +1080,7 @@ final class Services {
             // kickstart restarts a loaded job; bootstrap loads one that fell out.
             return "/bin/launchctl kickstart -k gui/\(getuid())/\(arg) || /bin/launchctl bootstrap gui/\(getuid()) '\(plist)'"
         case "docker":
-            guard let docker = docker() else { return nil }
-            return "'\(docker)' start \(arg)"
+            return dockerStart(arg)
         default:
             return nil
         }
@@ -1055,7 +1109,12 @@ final class Services {
         case "docker":
             guard let docker = docker() else { return (.unknown, "no docker") }
             let state = runTool(docker, ["inspect", "-f", "{{.State.Status}} {{.State.ExitCode}}", arg])
-            if state.status != 0 { return (.unknown, "docker off") }
+            if state.status != 0 {
+                // Either the engine is down (OrbStack not running) or there is
+                // no such container; `docker info` tells them apart.
+                let engineUp = runTool(docker, ["info", "--format", "{{.ServerVersion}}"]).status == 0
+                return engineUp ? (.unknown, "no container \(arg)") : (.stopped, "\(engineName) off")
+            }
             let words = state.output.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             if words.first == "running" { return (.running, "docker") }
             if words.count > 1, let code = Int(words[1]), code != 0 { return (.failed, "exit \(code)") }
@@ -1146,7 +1205,11 @@ final class Services {
             var printed = ""
             let startCommand = Services.recipe(line)
             if let startCommand = startCommand {
-                let result = runTool("/bin/sh", ["-c", "\(startCommand) 2>&1"], timeout: 60)
+                // The prelude gives the recipe a terminal's PATH (launchd's has no
+                // docker) and crossplay_engine_up, which docker recipes call and
+                // a START may call too.
+                let script = "\(Services.shellPrelude)\n{\n\(startCommand)\n} 2>&1"
+                let result = runTool("/bin/sh", ["-c", script], timeout: 180)
                 printed = String(result.output.suffix(1500))
                 log("restart: recipe exited \(result.status)")
             }
@@ -1189,7 +1252,7 @@ enum Doctor {
         "Read", "Grep", "Glob",
         "Bash(launchctl:*)", "Bash(docker:*)", "Bash(open:*)", "Bash(ps:*)", "Bash(pgrep:*)", "Bash(pkill:*)",
         "Bash(lsof:*)", "Bash(tail:*)", "Bash(cat:*)", "Bash(ls:*)", "Bash(log show:*)", "Bash(brew services:*)",
-        "Bash(crossplay-unlock:*)", "Bash(curl:*)",
+        "Bash(crossplay-unlock:*)", "Bash(curl:*)", "Bash(orb:*)", "Bash(orbctl:*)",
     ]
 
     static func tools() -> [String] {
@@ -1216,7 +1279,8 @@ enum Doctor {
         process.currentDirectoryURL = folder
         var environment = ProcessInfo.processInfo.environment
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        environment["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] =
+            "\(home)/.local/bin:\(home)/.orbstack/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         environment["HOME"] = home
         process.environment = environment
         let pipe = Pipe()
@@ -1254,6 +1318,7 @@ enum Doctor {
         - What that start command printed just now: \(printed.isEmpty ? "(nothing)" : printed)
         - What the check says now: \(state)
         - The services list is \(Services.path.path) (NAME | CHECK | START).
+        - Containers on this Mac run under \(Services.engineName); its CLI is `orb` when that is OrbStack.
 
         Find out why it is down and get it running again. Touch nothing unrelated to this service. If it needs \
         a start command the list does not have, say what it should be.
@@ -1363,11 +1428,16 @@ enum Adopt {
             }
             let result = runTool(docker, ["update", "--restart", "unless-stopped", args[2]])
             if result.status != 0 {
-                print("docker could not update \(args[2]); is Docker running and is that the container's name?")
+                print("\(docker) could not update \(args[2]). Is \(Services.engineName) running, and is that the "
+                      + "container's name? `docker ps -a --format '{{.Names}}'` lists them.")
                 exit(1)
             }
             Services.setLine(name, "docker \(args[2])", "")
-            print("\(name): Docker now restarts \(args[2]) whenever it stops (and when Docker starts).")
+            print("\(name): \(Services.engineName) now restarts \(args[2]) whenever it stops, and when "
+                  + "\(Services.engineName) starts.")
+            if Services.engineName == "OrbStack" {
+                print("For after a reboot: OrbStack > Settings > \"Start at login\" must be on.")
+            }
         case "--launchd" where args.count >= 3:
             Services.setLine(name, "launchd \(args[2])", "")
             print("\(name) is checked and restarted as the launchd job \(args[2]).")
