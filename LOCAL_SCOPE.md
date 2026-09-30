@@ -192,6 +192,15 @@ Everything else still applies: the resource protocol, `makeUniqueNoThrow`,
 HAL-only access, no hardcoded screen dimensions, free in `onExit()` what you
 allocate in `onEnter()`.
 
+## Every change to the Mac half ends with the commands to install it
+
+Standing request from the owner. Any change under `tools_local/remote-mac/`
+(the Swift helper, its hooks, services, scripts) is finished only when the
+reply ends with the exact commands to run on the Mac to install it: switching
+the Mac's checkout to the branch the change is on, then `./update.sh`, plus any
+one-time step the change needs (`claude-setup`, `adopt`, a new file). Nothing
+there compiles off the Mac, so those commands are also the first real test.
+
 ## Host tests live in `host-tests/`, never under `src/`
 
 PlatformIO's build filter is `+<*>`, so **every file under `src/` is compiled
