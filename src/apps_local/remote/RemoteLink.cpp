@@ -26,6 +26,10 @@ constexpr const char* kResponseUuid = "6f1b0a02-9d3c-4f5e-8a77-2b4c1d6e9f01";
 constexpr const char* kNowPlayingUuid = "6f1b0a03-9d3c-4f5e-8a77-2b4c1d6e9f01";
 constexpr const char* kCommandUuid = "6f1b0a04-9d3c-4f5e-8a77-2b4c1d6e9f01";
 constexpr const char* kMacStateUuid = "6f1b0a05-9d3c-4f5e-8a77-2b4c1d6e9f01";
+constexpr const char* kStatusUuid = "6f1b0a06-9d3c-4f5e-8a77-2b4c1d6e9f01";
+
+// Owned by the activity task: takeStatus() feeds it and statusBoards() reads it.
+StatusAssembler statusShown;
 
 #if defined(CROSSPLAY_BLE_HID)
 
@@ -35,6 +39,7 @@ NimBLECharacteristic* responseIn = nullptr;
 NimBLECharacteristic* nowPlayingIn = nullptr;
 NimBLECharacteristic* commandOut = nullptr;
 NimBLECharacteristic* macStateIn = nullptr;
+NimBLECharacteristic* statusIn = nullptr;
 volatile bool commandSubscribed = false;
 
 // Written by the NimBLE host task, read by the activity task. One producer,
@@ -98,6 +103,38 @@ void forgetMacState() {
   taskEXIT_CRITICAL(&nowLock);
 }
 
+// Status rows, queued by the NimBLE host task and drained by the activity. A
+// board is a burst of up to kStatusRowsMax writes, two boards can land back to
+// back, and a row dropped on overflow only abandons that one board.
+constexpr size_t kStatusQueue = 2 * kStatusRowsMax + 4;
+struct QueuedRow {
+  uint8_t len;
+  uint8_t data[kStatusFrameMax];
+};
+QueuedRow statusQueue[kStatusQueue];
+size_t statusHead = 0;  // next to read
+size_t statusCount = 0;
+bool statusGone = false;
+
+void queueStatus(const uint8_t* data, const size_t len) {
+  if (len == 0 || len > kStatusFrameMax) return;
+  taskENTER_CRITICAL(&nowLock);
+  if (statusCount < kStatusQueue) {
+    QueuedRow& slot = statusQueue[(statusHead + statusCount) % kStatusQueue];
+    slot.len = static_cast<uint8_t>(len);
+    std::memcpy(slot.data, data, len);
+    ++statusCount;
+  }
+  taskEXIT_CRITICAL(&nowLock);
+}
+
+void forgetStatus() {
+  taskENTER_CRITICAL(&nowLock);
+  statusCount = 0;
+  statusGone = true;
+  taskEXIT_CRITICAL(&nowLock);
+}
+
 class ChallengeCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, const uint16_t value) override {
     subscribed = value != 0;
@@ -105,6 +142,7 @@ class ChallengeCallbacks : public NimBLECharacteristicCallbacks {
     if (!subscribed) {
       queueNothingPlaying();
       forgetMacState();
+      forgetStatus();
     }
   }
 };
@@ -112,6 +150,13 @@ class ChallengeCallbacks : public NimBLECharacteristicCallbacks {
 class CommandCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, const uint16_t value) override {
     commandSubscribed = value != 0;
+  }
+};
+
+class StatusCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override {
+    const NimBLEAttValue& value = characteristic->getValue();
+    queueStatus(value.data(), value.size());
   }
 };
 
@@ -147,6 +192,7 @@ ResponseCallbacks responseCallbacks;
 NowPlayingCallbacks nowPlayingCallbacks;
 CommandCallbacks commandCallbacks;
 MacStateCallbacks macStateCallbacks;
+StatusCallbacks statusCallbacks;
 
 #endif  // CROSSPLAY_BLE_HID
 
@@ -182,13 +228,18 @@ void begin() {
   // Encrypted for the same reason as now playing: it is the Mac's word about
   // its own microphones, and only the bonded Mac should be able to say it.
   macStateIn = service->createCharacteristic(kMacStateUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
+  // Pages 2 and 3, encrypted for the same reason: session titles are the
+  // Mac's business, and only the bonded Mac should be able to write them.
+  statusIn =
+      service->createCharacteristic(kStatusUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC, kStatusFrameMax);
   if (challengeOut == nullptr || responseIn == nullptr || nowPlayingIn == nullptr || commandOut == nullptr ||
-      macStateIn == nullptr) {
+      macStateIn == nullptr || statusIn == nullptr) {
     LOG_ERR(kTag, "unlock: could not create the characteristics");
     return;
   }
   commandOut->setCallbacks(&commandCallbacks);
   macStateIn->setCallbacks(&macStateCallbacks);
+  statusIn->setCallbacks(&statusCallbacks);
   challengeOut->setCallbacks(&challengeCallbacks);
   responseIn->setCallbacks(&responseCallbacks);
   nowPlayingIn->setCallbacks(&nowPlayingCallbacks);
@@ -207,9 +258,11 @@ void end() {
   nowPlayingIn = nullptr;
   commandOut = nullptr;
   macStateIn = nullptr;
+  statusIn = nullptr;
   commandSubscribed = false;
   queueNothingPlaying();
   forgetMacState();
+  forgetStatus();
   subscribed = false;
   answerReady = false;
   answerLen = 0;
@@ -319,6 +372,35 @@ bool takeMacState(MacState& out) {
   return true;
 }
 
+bool takeStatus() {
+  bool changed = false;
+  taskENTER_CRITICAL(&nowLock);
+  const bool gone = statusGone;
+  statusGone = false;
+  taskEXIT_CRITICAL(&nowLock);
+  if (gone) {
+    statusShown.forget();
+    changed = true;
+  }
+  // One row per lock: feed() is the slow part and needs no lock of its own.
+  for (;;) {
+    QueuedRow row;
+    taskENTER_CRITICAL(&nowLock);
+    const bool have = statusCount > 0;
+    if (have) {
+      row = statusQueue[statusHead];
+      statusHead = (statusHead + 1) % kStatusQueue;
+      --statusCount;
+    }
+    taskEXIT_CRITICAL(&nowLock);
+    if (!have) break;
+    if (statusShown.feed(row.data, row.len)) changed = true;
+  }
+  return changed;
+}
+
+const StatusAssembler& statusBoards() { return statusShown; }
+
 void randomBytes(uint8_t* out, const size_t len) {
   for (size_t at = 0; at < len; at += 4) {
     const uint32_t word = esp_random();
@@ -345,6 +427,50 @@ void cancel() {}
 
 bool sendCommand(MacCommand) { return false; }
 bool takeMacState(MacState&) { return false; }
+
+// CROSSPOINT_SIM_STATUS=1 hands pages 2 and 3 a plausible pair of boards, so
+// they can be rendered in a simulator with no Mac to describe.
+bool takeStatus() {
+  static bool given = false;
+  const char* env = std::getenv("CROSSPOINT_SIM_STATUS");
+  if (given || env == nullptr || env[0] != '1') return false;
+  given = true;
+  struct Seed {
+    StatusBoardId board;
+    StatusCode code;
+    const char* title;
+    const char* detail;
+  };
+  static constexpr Seed kSeeds[] = {
+      {StatusBoardId::Claude, StatusCode::AwaitingInput, "Add the stocks sleep screen", "xteink-x4-pro-2"},
+      {StatusBoardId::Claude, StatusCode::InProcess, "Refactor the photo importer", "immich-tools"},
+      {StatusBoardId::Claude, StatusCode::Completed, "Write the README", "dotfiles"},
+      {StatusBoardId::Claude, StatusCode::Failed, "Migrate the database", "home-server"},
+      {StatusBoardId::Services, StatusCode::Running, "Ambient tasks", "launchd"},
+      {StatusBoardId::Services, StatusCode::Running, "Immich", "http"},
+      {StatusBoardId::Services, StatusCode::Stopped, "Voice typing", "process"},
+      {StatusBoardId::Services, StatusCode::Failed, "Wake TV", "exit 1"},
+      {StatusBoardId::Services, StatusCode::Running, "Remote unlock", "this helper"},
+  };
+  for (const StatusBoardId board : {StatusBoardId::Claude, StatusBoardId::Services}) {
+    uint8_t count = 0;
+    for (const Seed& seed : kSeeds) count = static_cast<uint8_t>(count + (seed.board == board ? 1 : 0));
+    uint8_t index = 0;
+    for (const Seed& seed : kSeeds) {
+      if (seed.board != board) continue;
+      StatusRow row;
+      row.status = seed.code;
+      std::snprintf(row.title, sizeof(row.title), "%s", seed.title);
+      std::snprintf(row.detail, sizeof(row.detail), "%s", seed.detail);
+      uint8_t frame[kStatusFrameMax];
+      const size_t len = encodeStatusRow(board, count, index++, row, frame, sizeof(frame));
+      statusShown.feed(frame, len);
+    }
+  }
+  return true;
+}
+
+const StatusAssembler& statusBoards() { return statusShown; }
 
 // CROSSPOINT_SIM_NOWPLAYING="Title|Artist" hands the panel one song, so the
 // now-playing row can be rendered and photographed in a simulator that has no

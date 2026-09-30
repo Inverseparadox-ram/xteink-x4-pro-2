@@ -541,6 +541,9 @@ void RemoteActivity::loop() {
       }
     }
   }
+  // Pages 2 and 3. Drained on every page so nothing piles up, repainted only
+  // when a list is on screen: the controls page shows none of it.
+  if (remote::helper::takeStatus() && phase_ == Phase::Remote && page_ != 0) requestUpdate();
   remote::MacState macNext;
   if (remote::helper::takeMacState(macNext)) {
     RenderLock lock(*this);
@@ -629,6 +632,12 @@ void RemoteActivity::loop() {
     case remoteui::ActionProfile:
       cycleProfile();
       break;
+    case remoteui::ActionNextPage: {
+      RenderLock lock(*this);
+      page_ = (page_ + 1) % remoteui::kPageCount;
+      requestUpdate();
+      break;
+    }
     case remoteui::ActionForget: {
       RenderLock lock(*this);
       phase_ = Phase::Forget;
@@ -687,6 +696,20 @@ void RemoteActivity::render(RenderLock&&) {
     model.detail = "Type this into the unlock helper on the Mac. It is shown once. Then press either side key.";
     remoteui::buildPair(screen, model);
     what = "Remote pair";
+  } else if (page_ != 0) {
+    const bool claude = page_ == 1;
+    remoteui::StatusPageModel model;
+    model.title = claude ? "CLAUDE" : "MAC";
+    model.page = page_;
+    model.board =
+        &remote::helper::statusBoards().board(claude ? remote::StatusBoardId::Claude : remote::StatusBoardId::Services);
+    model.helperConnected = remote::link() == remote::Link::Connected && remote::helper::helperPresent();
+    model.emptyLine = claude ? "No Claude Code sessions on the Mac. If there should be, run "
+                               "crossplay-unlock claude-setup there once."
+                             : "No services listed. Edit services.txt beside the helper on the Mac.";
+    model.offerForget = !claude;
+    remoteui::buildStatusPage(screen, model);
+    what = claude ? "Remote claude" : "Remote mac";
   } else {
     const remote::Link link = remote::link();
     remoteui::RemoteModel model;
@@ -746,7 +769,7 @@ void RemoteActivity::render(RenderLock&&) {
 
   interactionsReady_ = true;
   toybox::reportOverflow(interactions_, what);
-  const bool phaseChanged = !everShown_ || phase_ != lastShownPhase_;
+  const bool phaseChanged = !everShown_ || phase_ != lastShownPhase_ || page_ != lastShownPage_;
 
   const auto labels = mappedInput.mapLabels("Back", "", "Vol+", "Vol-");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -754,6 +777,7 @@ void RemoteActivity::render(RenderLock&&) {
 
   if (phaseChanged) {
     lastShownPhase_ = phase_;
+    lastShownPage_ = page_;
     phaseShownAtMs_ = millis();
     everShown_ = true;
   }

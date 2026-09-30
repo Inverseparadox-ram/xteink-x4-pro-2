@@ -37,6 +37,16 @@ enum Wire {
     static let nowPlaying = CBUUID(string: "6F1B0A03-9D3C-4F5E-8A77-2B4C1D6E9F01")
     static let command = CBUUID(string: "6F1B0A04-9D3C-4F5E-8A77-2B4C1D6E9F01")
     static let macState = CBUUID(string: "6F1B0A05-9D3C-4F5E-8A77-2B4C1D6E9F01")
+    static let status = CBUUID(string: "6F1B0A06-9D3C-4F5E-8A77-2B4C1D6E9F01")
+
+    // Pages 2 and 3 of the remote. One write per row; RemoteCore.h's "Status
+    // boards" is the other half and host-tests/remote pins the bytes.
+    static let statusVersion: UInt8 = 1
+    static let boardClaude: UInt8 = 1
+    static let boardServices: UInt8 = 2
+    static let statusRowsMax = 10
+    static let statusTitleMax = 48
+    static let statusDetailMax = 32
 
     // The microphone button. [version, command] from the reader, [version,
     // flags] back; host-tests/remote pins both.
@@ -575,6 +585,416 @@ final class Microphones {
     }
 }
 
+
+// MARK: - Pages 2 and 3: status boards
+
+enum StatusCode: UInt8 {
+    case unknown = 0, inProcess = 1, awaitingInput = 2, completed = 3, failed = 4, running = 5, stopped = 6
+}
+
+struct StatusRow: Equatable {
+    var status: StatusCode
+    var title: String
+    var detail: String
+}
+
+// UTF-8 cut at a character boundary, never through one.
+func utf8Prefix(_ text: String, _ maxBytes: Int) -> [UInt8] {
+    var out: [UInt8] = []
+    for scalar in text.unicodeScalars {
+        let bytes = Array(String(scalar).utf8)
+        if out.count + bytes.count > maxBytes { break }
+        out.append(contentsOf: bytes)
+    }
+    return out
+}
+
+// Exactly the frames RemoteCore's encodeStatusRow produces. An empty board is
+// one frame with count 0.
+func statusFrames(board: UInt8, rows: [StatusRow]) -> [Data] {
+    let shown = Array(rows.prefix(Wire.statusRowsMax))
+    if shown.isEmpty { return [Data([Wire.statusVersion, board, 0, 0, 0, 0, 0])] }
+    var frames: [Data] = []
+    for (index, row) in shown.enumerated() {
+        let title = utf8Prefix(row.title, Wire.statusTitleMax)
+        let detail = utf8Prefix(row.detail, Wire.statusDetailMax)
+        var bytes: [UInt8] = [Wire.statusVersion, board, UInt8(shown.count), UInt8(index), row.status.rawValue,
+                              UInt8(title.count)]
+        bytes.append(contentsOf: title)
+        bytes.append(UInt8(detail.count))
+        bytes.append(contentsOf: detail)
+        frames.append(Data(bytes))
+    }
+    return frames
+}
+
+func supportDirectory() -> URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("CrossPlayUnlock", isDirectory: true)
+    try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    return base
+}
+
+// Runs a program and returns its exit status and standard output. Used for
+// the checks and for walking up to the Claude process from a hook.
+@discardableResult
+func runTool(_ path: String, _ arguments: [String], timeout: TimeInterval = 5) -> (status: Int32, output: String) {
+    guard FileManager.default.isExecutableFile(atPath: path) else { return (-1, "") }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = arguments
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { return (-1, "") }
+    let deadline = Date().addingTimeInterval(timeout)
+    while process.isRunning && Date() < deadline { usleep(20_000) }
+    if process.isRunning {
+        process.terminate()
+        return (-1, "")
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+}
+
+func processAlive(_ pid: Int32) -> Bool {
+    if pid <= 0 { return false }
+    return kill(pid, 0) == 0 || errno == EPERM
+}
+
+// MARK: Claude Code sessions (page 2)
+//
+// Claude Code runs a hook command on each event, with the event as JSON on
+// standard input. `claude-setup` installs `crossplay-unlock claude-hook` for
+// the events that change what a session is doing, and the hook records it in
+// claude-sessions.json. The agent reads that file; nothing here talks to
+// Claude Code any other way.
+//
+//   UserPromptSubmit, PostToolUse   -> in process
+//   PreToolUse on AskUserQuestion
+//     or ExitPlanMode, Notification
+//     asking for permission         -> awaiting input
+//   Stop                            -> completed
+//   SessionEnd                      -> removed
+//   the claude process gone while
+//     in process or awaiting input  -> failed
+
+final class ClaudeSessions {
+    static var path: URL { supportDirectory().appendingPathComponent("claude-sessions.json") }
+    static var lockPath: String { supportDirectory().appendingPathComponent("claude-sessions.lock").path }
+
+    // Every hook invocation is its own process and several sessions can fire
+    // at once, so the file is only ever rewritten under an exclusive lock.
+    static func withLock(_ body: () -> Void) {
+        let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
+        if fd >= 0 { flock(fd, LOCK_EX) }
+        defer {
+            if fd >= 0 {
+                flock(fd, LOCK_UN)
+                close(fd)
+            }
+        }
+        body()
+    }
+
+    static func load() -> [String: [String: Any]] {
+        guard let data = try? Data(contentsOf: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else { return [:] }
+        return json
+    }
+
+    static func save(_ sessions: [String: [String: Any]]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: sessions, options: [.prettyPrinted]) else { return }
+        let temp = path.appendingPathExtension("part")
+        try? data.write(to: temp)
+        _ = try? FileManager.default.replaceItemAt(path, withItemAt: temp)
+        if !FileManager.default.fileExists(atPath: path.path) { try? data.write(to: path) }
+    }
+
+    // The claude process this hook belongs to: the nearest ancestor whose name
+    // says claude, else the grandparent (the shell's parent).
+    static func claudePid() -> Int32 {
+        var pid = getppid()
+        var fallback: Int32 = 0
+        for depth in 0..<6 {
+            let info = runTool("/bin/ps", ["-o", "ppid=,comm=", "-p", String(pid)], timeout: 2).output
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let space = info.firstIndex(of: " ") else { break }
+            let parent = Int32(info[..<space].trimmingCharacters(in: .whitespaces)) ?? 0
+            let name = info[space...].trimmingCharacters(in: .whitespaces).lowercased()
+            if name.contains("claude") { return pid }
+            if depth == 1 { fallback = pid }
+            if parent <= 1 { break }
+            pid = parent
+        }
+        return fallback
+    }
+
+    // A session's title as Claude Code wrote it, from the transcript's summary
+    // line when there is one.
+    static func summary(from transcript: String?) -> String? {
+        guard let transcript = transcript, let data = FileManager.default.contents(atPath: transcript),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        var found: String?
+        for line in text.split(separator: "\n") where line.contains("\"summary\"") {
+            if let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+               json["type"] as? String == "summary", let summary = json["summary"] as? String, !summary.isEmpty {
+                found = summary
+            }
+        }
+        return found
+    }
+
+    // `crossplay-unlock claude-hook`: never prints, never fails. Anything on
+    // standard output from UserPromptSubmit would be added to Claude's context.
+    static func hook() {
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        guard let event = try? JSONSerialization.jsonObject(with: input) as? [String: Any],
+              let id = event["session_id"] as? String, let name = event["hook_event_name"] as? String else { return }
+        let now = Date().timeIntervalSince1970
+        withLock {
+            var sessions = load()
+            var entry = sessions[id] ?? [:]
+            if let cwd = event["cwd"] as? String { entry["cwd"] = cwd }
+            switch name {
+            case "UserPromptSubmit":
+                entry["status"] = "inProcess"
+                if (entry["firstPrompt"] as? String ?? "").isEmpty, let prompt = event["prompt"] as? String {
+                    entry["firstPrompt"] = String(prompt.prefix(200))
+                }
+                if (entry["pid"] as? Int ?? 0) == 0 { entry["pid"] = Int(claudePid()) }
+            case "PostToolUse":
+                entry["status"] = "inProcess"
+            case "PreToolUse":
+                entry["status"] = "awaitingInput"
+            case "Notification":
+                let message = (event["message"] as? String ?? "").lowercased()
+                // Claude also notifies when it has sat idle after finishing;
+                // that is not a question, so a completed turn stays completed.
+                if message.contains("permission") || (entry["status"] as? String) == "inProcess" {
+                    entry["status"] = "awaitingInput"
+                }
+            case "Stop":
+                entry["status"] = "completed"
+                if let title = summary(from: event["transcript_path"] as? String) { entry["title"] = title }
+            case "SessionEnd":
+                sessions.removeValue(forKey: id)
+                save(sessions)
+                return
+            default:
+                return
+            }
+            entry["updated"] = now
+            sessions[id] = entry
+            save(sessions)
+        }
+    }
+
+    // The board the agent sends: the ones wanting a person first, then work in
+    // progress, then the finished, newest first within each.
+    static func rows() -> [StatusRow] {
+        let now = Date().timeIntervalSince1970
+        var changed = false
+        var rows: [(rank: Int, updated: Double, row: StatusRow)] = []
+        withLock {
+            var sessions = load()
+            for (id, entry) in sessions {
+                let updated = entry["updated"] as? Double ?? 0
+                var status = entry["status"] as? String ?? ""
+                let pid = Int32(entry["pid"] as? Int ?? 0)
+                if (status == "inProcess" || status == "awaitingInput") && pid > 0 && !processAlive(pid) {
+                    status = "failed"
+                    var next = entry
+                    next["status"] = status
+                    next["updated"] = now
+                    sessions[id] = next
+                    changed = true
+                }
+                // Finished work drops off after a day, failures after two hours.
+                let age = now - updated
+                if (status == "completed" && age > 86_400) || (status == "failed" && age > 7_200) || status.isEmpty {
+                    sessions.removeValue(forKey: id)
+                    changed = true
+                    continue
+                }
+                let code: StatusCode
+                let rank: Int
+                switch status {
+                case "awaitingInput": code = .awaitingInput; rank = 0
+                case "failed": code = .failed; rank = 1
+                case "inProcess": code = .inProcess; rank = 2
+                default: code = .completed; rank = 3
+                }
+                let cwd = entry["cwd"] as? String ?? ""
+                let folder = cwd.isEmpty ? "" : URL(fileURLWithPath: cwd).lastPathComponent
+                var title = entry["title"] as? String ?? ""
+                if title.isEmpty { title = (entry["firstPrompt"] as? String ?? "").replacingOccurrences(of: "\n", with: " ") }
+                if title.isEmpty { title = folder.isEmpty ? "Claude Code" : folder }
+                rows.append((rank: rank, updated: updated, row: StatusRow(status: code, title: title, detail: folder)))
+            }
+            if changed { save(sessions) }
+        }
+        return rows.sorted { $0.rank != $1.rank ? $0.rank < $1.rank : $0.updated > $1.updated }.map { $0.row }
+    }
+
+    // `crossplay-unlock claude-setup`: adds the hook to ~/.claude/settings.json,
+    // keeping everything already there and a copy of the file as it was.
+    static func setup() {
+        let settingsURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/settings.json")
+        var settings: [String: Any] = [:]
+        if let data = try? Data(contentsOf: settingsURL) {
+            guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                print("~/.claude/settings.json is not valid JSON; not touching it. Fix it and run this again.")
+                exit(1)
+            }
+            settings = parsed
+            let backup = settingsURL.appendingPathExtension("crossplay-backup")
+            try? FileManager.default.removeItem(at: backup)
+            try? FileManager.default.copyItem(at: settingsURL, to: backup)
+        }
+        let installed = "/usr/local/bin/crossplay-unlock"
+        let binary = FileManager.default.isExecutableFile(atPath: installed)
+            ? installed : URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.path
+        let command = "\(binary) claude-hook"
+        var hooks = settings["hooks"] as? [String: Any] ?? [:]
+        let wanted: [(event: String, matcher: String?)] = [
+            ("UserPromptSubmit", nil), ("PreToolUse", "AskUserQuestion|ExitPlanMode"), ("PostToolUse", "*"),
+            ("Notification", nil), ("Stop", nil), ("SessionEnd", nil),
+        ]
+        var added = 0
+        for (event, matcher) in wanted {
+            var groups = hooks[event] as? [[String: Any]] ?? []
+            let already = groups.contains { group in
+                (group["hooks"] as? [[String: Any]] ?? []).contains {
+                    ($0["command"] as? String ?? "").contains("crossplay-unlock claude-hook")
+                }
+            }
+            if already { continue }
+            var group: [String: Any] = ["hooks": [["type": "command", "command": command]]]
+            if let matcher = matcher { group["matcher"] = matcher }
+            groups.append(group)
+            hooks[event] = groups
+            added += 1
+        }
+        settings["hooks"] = hooks
+        try? FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        guard let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]),
+              (try? data.write(to: settingsURL)) != nil else {
+            print("could not write ~/.claude/settings.json")
+            exit(1)
+        }
+        print(added == 0 ? "Already set up." : "Added the CrossPlay hook to \(added) Claude Code events.")
+        print("Sessions started from now on appear on the reader's CLAUDE page.")
+    }
+}
+
+// MARK: Mac services (page 3)
+//
+// services.txt, beside the ledger: one service per line, NAME | CHECK.
+
+final class Services {
+    static var path: URL { supportDirectory().appendingPathComponent("services.txt") }
+
+    static let sample = """
+    # CrossPlay Remote, page 3: one service per line.   NAME | CHECK
+    #
+    # CHECK is one of:
+    #   launchd <label>      a launchd job:    launchd com.example.agent
+    #   process <text>       a running process whose command line contains <text>
+    #   docker <container>   a Docker container
+    #   http <url>           something answering over HTTP
+    #   self                 this helper
+    #
+    # These are guesses. Change each CHECK to match how it runs on this Mac;
+    # `crossplay-unlock services` prints what each line finds right now.
+
+    Ambient tasks | process ambient
+    Immich        | http http://localhost:2283/api/server/ping
+    Voice typing  | process voice
+    Wake TV       | process wake
+    Remote unlock | self
+
+    """
+
+    static func lines() -> [(name: String, check: String)] {
+        if !FileManager.default.fileExists(atPath: path.path) {
+            try? sample.data(using: .utf8)?.write(to: path)
+        }
+        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return [] }
+        var out: [(name: String, check: String)] = []
+        for raw in text.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            let parts = line.split(separator: "|", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2, !parts[0].isEmpty { out.append((name: parts[0], check: parts[1])) }
+        }
+        return out
+    }
+
+    static func docker() -> String? {
+        ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/Applications/Docker.app/Contents/Resources/bin/docker"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    static func check(_ check: String) -> (StatusCode, String) {
+        let parts = check.split(separator: " ", maxSplits: 1).map(String.init)
+        let kind = parts.first?.lowercased() ?? ""
+        let arg = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+        switch kind {
+        case "self":
+            return (.running, "this helper")
+        case "process":
+            let found = runTool("/usr/bin/pgrep", ["-f", arg]).status == 0
+            return (found ? .running : .stopped, "process")
+        case "launchd":
+            var result = runTool("/bin/launchctl", ["print", "gui/\(getuid())/\(arg)"])
+            if result.status != 0 { result = runTool("/bin/launchctl", ["print", "system/\(arg)"]) }
+            if result.status != 0 { return (.unknown, "not loaded") }
+            if result.output.contains("state = running") { return (.running, "launchd") }
+            if let range = result.output.range(of: "last exit code = ") {
+                let code = result.output[range.upperBound...].prefix { $0.isNumber || $0 == "-" }
+                if let value = Int(code), value != 0 { return (.failed, "exit \(value)") }
+            }
+            return (.stopped, "launchd")
+        case "docker":
+            guard let docker = docker() else { return (.unknown, "no docker") }
+            let state = runTool(docker, ["inspect", "-f", "{{.State.Status}} {{.State.ExitCode}}", arg])
+            if state.status != 0 { return (.unknown, "docker off") }
+            let words = state.output.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if words.first == "running" { return (.running, "docker") }
+            if words.count > 1, let code = Int(words[1]), code != 0 { return (.failed, "exit \(code)") }
+            return (.stopped, "docker")
+        case "http":
+            guard let url = URL(string: arg) else { return (.unknown, "bad url") }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 4
+            let done = DispatchSemaphore(value: 0)
+            var answer: (StatusCode, String) = (.stopped, "no answer")
+            URLSession.shared.dataTask(with: request) { _, response, error in
+                if let http = response as? HTTPURLResponse {
+                    answer = http.statusCode < 500 ? (.running, "http") : (.failed, "http \(http.statusCode)")
+                } else if error != nil {
+                    answer = (.stopped, "no answer")
+                }
+                done.signal()
+            }.resume()
+            _ = done.wait(timeout: .now() + 5)
+            return answer
+        default:
+            return (.unknown, "bad check")
+        }
+    }
+
+    static func rows() -> [StatusRow] {
+        lines().map { line in
+            let (status, detail) = check(line.check)
+            return StatusRow(status: status, title: line.name, detail: detail)
+        }
+    }
+}
+
 // MARK: - The agent
 
 final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -583,6 +1003,14 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private var responseCharacteristic: CBCharacteristic?
     private var nowPlayingCharacteristic: CBCharacteristic?
     private var macStateCharacteristic: CBCharacteristic?
+    private var statusCharacteristic: CBCharacteristic?
+    // What each board last sent; nil after a reconnect, so the reader is told
+    // everything again.
+    private var sentBoards: [UInt8: [Data]] = [:]
+    private var claudeTimer: Timer?
+    private var servicesTimer: Timer?
+    private var servicesRows: [StatusRow]?
+    private let checkQueue = DispatchQueue(label: "crossplay.services")
     private let microphones = Microphones()
     private var lastMacState: Data?
     private let ledger = Ledger()
@@ -598,6 +1026,16 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
         microphones.onChange = { [weak self] in self?.sendMacState() }
+        // Claude sessions change on a hook, so the file is cheap to look at
+        // often; the services checks spawn processes, so they run less often
+        // and off the main thread.
+        claudeTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            self?.sendBoard(Wire.boardClaude, ClaudeSessions.rows())
+        }
+        servicesTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.refreshServices()
+        }
+        refreshServices()
         let centre = DistributedNotificationCenter.default()
         for source in NowPlaying.sources {
             observers.append(centre.addObserver(forName: NSNotification.Name(source.notification), object: nil,
@@ -636,6 +1074,26 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         lastMacState = frame
     }
 
+    private func refreshServices() {
+        checkQueue.async { [weak self] in
+            let rows = Services.rows()
+            DispatchQueue.main.async {
+                self?.servicesRows = rows
+                self?.sendBoard(Wire.boardServices, rows)
+            }
+        }
+    }
+
+    // A board goes out only when it changed, row by row, with responses so a
+    // failed write is logged and the board is sent again next time.
+    private func sendBoard(_ board: UInt8, _ rows: [StatusRow]) {
+        let frames = statusFrames(board: board, rows: rows)
+        guard frames != sentBoards[board] else { return }
+        guard let characteristic = statusCharacteristic, let peripheral = reader else { return }
+        for frame in frames { peripheral.writeValue(frame, for: characteristic, type: .withResponse) }
+        sentBoards[board] = frames
+    }
+
     private func handleCommand(_ frame: Data) {
         let bytes = [UInt8](frame)
         guard bytes.count == 2, bytes[0] == Wire.macLinkVersion else {
@@ -661,6 +1119,7 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         // Try again next time rather than believing the reader has it.
         if characteristic.uuid == Wire.nowPlaying { lastSent = nil }
         if characteristic.uuid == Wire.macState { lastMacState = nil }
+        if characteristic.uuid == Wire.status { sentBoards = [:] }
     }
 
     func centralManagerDidUpdateState(_ manager: CBCentralManager) {
@@ -707,6 +1166,8 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         lastSent = nil
         macStateCharacteristic = nil
         lastMacState = nil
+        statusCharacteristic = nil
+        sentBoards = [:]
         // The reader takes its radio down when the app closes, so a
         // disconnection is normal rather than a failure. Reconnect stays
         // pending until it advertises again.
@@ -719,7 +1180,7 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             return
         }
         peripheral.discoverCharacteristics([Wire.challenge, Wire.response, Wire.nowPlaying, Wire.command,
-                                            Wire.macState], for: service)
+                                            Wire.macState, Wire.status], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
@@ -731,6 +1192,12 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             }
             if characteristic.uuid == Wire.response { responseCharacteristic = characteristic }
             if characteristic.uuid == Wire.command { peripheral.setNotifyValue(true, for: characteristic) }
+            if characteristic.uuid == Wire.status {
+                statusCharacteristic = characteristic
+                sentBoards = [:]
+                sendBoard(Wire.boardClaude, ClaudeSessions.rows())
+                if let rows = servicesRows { sendBoard(Wire.boardServices, rows) }
+            }
             if characteristic.uuid == Wire.macState {
                 macStateCharacteristic = characteristic
                 lastMacState = nil
@@ -943,7 +1410,15 @@ case "unblock": commandUnblock()
 case "status": commandStatus()
 case "forget": commandForget()
 case "run": commandRun()
+case "claude-hook": ClaudeSessions.hook()
+case "claude-setup": ClaudeSessions.setup()
+case "services":
+    for line in Services.lines() {
+        let (status, detail) = Services.check(line.check)
+        print("\(line.name): \(status) (\(detail))  [\(line.check)]")
+    }
+    print("edit: \(Services.path.path)")
 default:
-    print("usage: crossplay-unlock [pair|password|unblock|status|forget|run]")
+    print("usage: crossplay-unlock [pair|password|unblock|status|forget|run|claude-setup|services]")
     exit(2)
 }

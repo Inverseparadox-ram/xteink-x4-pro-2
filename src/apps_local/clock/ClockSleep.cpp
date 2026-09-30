@@ -21,6 +21,7 @@
 #include "../ui/ToyboxTheme.h"
 #include "../weather/WeatherCore.h"
 #include "../weather/WeatherFetch.h"
+#include "../weather/WeatherNightly.h"
 #include "../weather/WeatherStore.h"
 #include "ClockCore.h"
 #include "ClockScreens.h"
@@ -272,8 +273,13 @@ uint64_t armMicros(const uint32_t liveSeconds, const uint64_t fallbackMicros) {
   uint32_t clockSeconds = 0;
   Civil now;
   if (enabled() && readNow(now)) clockSeconds = secondsToNextMinute(now.second);
+  // The Weather app's nightly fetch rides the same alarm, and like the clock
+  // it is not Live's: whichever of the two is sooner stands in for both.
+  uint32_t ownSeconds = clockSeconds;
+  const uint32_t weatherSeconds = weather::nightly::secondsUntilDue();
+  if (weatherSeconds > 0 && (ownSeconds == 0 || weatherSeconds < ownSeconds)) ownSeconds = weatherSeconds;
   const uint32_t fallbackSeconds = static_cast<uint32_t>(fallbackMicros / 1000000ULL);
-  const SleepAlarm alarm = sleepAlarm(liveSeconds, clockSeconds, fallbackSeconds);
+  const SleepAlarm alarm = sleepAlarm(liveSeconds, ownSeconds, fallbackSeconds);
   if (!glassKnown()) {
     glass = Glass{};
     glass.magic = kMagic;
@@ -282,12 +288,16 @@ uint64_t armMicros(const uint32_t liveSeconds, const uint64_t fallbackMicros) {
     glass.battery = -1;
   }
   glass.liveOwns = alarm.liveOwns ? 1 : 0;
-  if (clockSeconds > 0) {
+  if (ownSeconds > 0) {
     LOG_DBG(kTag, "alarm %us (%s)", static_cast<unsigned>(alarm.seconds), alarm.liveOwns ? "live" : "clock");
   }
   // The fallback keeps its exact microseconds; the others are whole seconds.
   if (alarm.liveOwns && liveSeconds == 0) return fallbackMicros;
   return static_cast<uint64_t>(alarm.seconds) * 1000000ULL;
+}
+
+void weatherChanged() {
+  if (glassKnown()) glass.weatherHour = -1;
 }
 
 void forgetGlass() {

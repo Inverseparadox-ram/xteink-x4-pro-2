@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "../../src/apps_local/remote/RemoteCore.h"
 
@@ -217,6 +218,67 @@ static void testTheMicrophoneFramesArePinned() {
   CHECK(!untouched.known, "and changes nothing");
 }
 
+static std::vector<uint8_t> statusFrame(const remote::StatusBoardId board, const uint8_t count, const uint8_t index,
+                                        const remote::StatusCode code, const char* title, const char* detail) {
+  remote::StatusRow row;
+  row.status = code;
+  std::snprintf(row.title, sizeof(row.title), "%s", title);
+  std::snprintf(row.detail, sizeof(row.detail), "%s", detail);
+  std::vector<uint8_t> out(remote::kStatusFrameMax);
+  out.resize(remote::encodeStatusRow(board, count, index, row, out.data(), out.size()));
+  return out;
+}
+
+static void testTheStatusBoardsAssembleWholeOrNotAtAll() {
+  using remote::StatusBoardId;
+  using remote::StatusCode;
+  remote::StatusAssembler boards;
+  CHECK(!boards.board(StatusBoardId::Claude).known, "nothing known at first");
+
+  // Pinned bytes: the Swift helper produces exactly these.
+  const std::vector<uint8_t> one = statusFrame(StatusBoardId::Claude, 2, 0, StatusCode::InProcess, "Fix build", "app");
+  const uint8_t pinned[] = {1, 1, 2, 0, 1, 9, 'F', 'i', 'x', ' ', 'b', 'u', 'i', 'l', 'd', 3, 'a', 'p', 'p'};
+  CHECK(one.size() == sizeof(pinned) && std::memcmp(one.data(), pinned, sizeof(pinned)) == 0, "row bytes pinned");
+
+  CHECK(!boards.feed(one.data(), one.size()), "first of two is not a board yet");
+  CHECK(!boards.board(StatusBoardId::Claude).known, "half a board is not shown");
+  const auto two = statusFrame(StatusBoardId::Claude, 2, 1, StatusCode::AwaitingInput, "Stocks app", "xteink");
+  CHECK(boards.feed(two.data(), two.size()), "last row completes the board");
+  const remote::StatusBoard& claude = boards.board(StatusBoardId::Claude);
+  CHECK(claude.known && claude.count == 2, "two rows");
+  CHECK(std::strcmp(claude.rows[1].title, "Stocks app") == 0 && claude.rows[1].status == StatusCode::AwaitingInput,
+        "second row");
+  CHECK(!boards.board(StatusBoardId::Services).known, "the other board is separate");
+
+  // Out of order: the board on screen stays, the broken one is dropped.
+  const auto stray = statusFrame(StatusBoardId::Claude, 3, 1, StatusCode::Completed, "x", "");
+  CHECK(!boards.feed(stray.data(), stray.size()), "a row out of step is refused");
+  CHECK(boards.board(StatusBoardId::Claude).count == 2, "the shown board survives");
+
+  // An empty board is one frame.
+  const auto empty = statusFrame(StatusBoardId::Services, 0, 0, StatusCode::Unknown, "", "");
+  CHECK(boards.feed(empty.data(), empty.size()), "empty board completes");
+  CHECK(boards.board(StatusBoardId::Services).known && boards.board(StatusBoardId::Services).count == 0, "empty");
+
+  const uint8_t junk[] = {1, 9, 1, 0, 1, 0, 0};
+  CHECK(!boards.feed(junk, sizeof(junk)), "unknown board");
+  const uint8_t badStatus[] = {1, 1, 1, 0, 99, 0, 0};
+  CHECK(!boards.feed(badStatus, sizeof(badStatus)), "unknown status");
+  const uint8_t tooMany[] = {1, 1, 11, 0, 1, 0, 0};
+  CHECK(!boards.feed(tooMany, sizeof(tooMany)), "more rows than the page holds");
+
+  // Newlines cannot break a row.
+  const auto nasty = statusFrame(StatusBoardId::Services, 1, 0, StatusCode::Failed, "Imm\nich", "");
+  CHECK(boards.feed(nasty.data(), nasty.size()), "one-row board");
+  CHECK(std::strchr(boards.board(StatusBoardId::Services).rows[0].title, '\n') == nullptr, "control chars removed");
+
+  CHECK(std::string(remote::statusWord(StatusCode::AwaitingInput)) == "awaiting input", "word");
+  CHECK(remote::statusNeedsAttention(StatusCode::Failed) && !remote::statusNeedsAttention(StatusCode::Completed),
+        "attention");
+  boards.forget();
+  CHECK(!boards.board(StatusBoardId::Claude).known && !boards.board(StatusBoardId::Services).known, "forgotten");
+}
+
 int main() {
   testOnlyTheProfileThatKnowsTheNumbersPrintsThem();
   testBrowserSeekTypesTheYouTubeKeys();
@@ -227,6 +289,7 @@ int main() {
   testNothingPlayingClearsTheLine();
   testALongTitleIsCutOnACharacterNeverThroughOne();
   testControlCharactersNeverReachTheScreen();
+  testTheStatusBoardsAssembleWholeOrNotAtAll();
   std::printf("%s  remote core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;
 }

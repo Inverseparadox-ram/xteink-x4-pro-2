@@ -41,6 +41,7 @@
 #include "apps_local/clock/ClockSleep.h"
 #include "apps_local/live/LiveEngine.h"
 #include "apps_local/powerprobe/PowerProbe.h"
+#include "apps_local/weather/WeatherNightly.h"
 
 // How long the device sleeps before waking itself, in microseconds. 0 means
 // only the power button ends a sleep, which is how every build has behaved
@@ -740,7 +741,11 @@ void setup() {
       // would be a fetch a minute.
       const bool liveTimer = clockapp::sleep::liveOwnsTimer();
       const uint32_t nextWake = live::engine::onSleep(timerBroughtSomething, /*timerFired=*/liveTimer);
-      if (timerBroughtSomething || clockapp::sleep::repaintDue()) {
+      // The Weather app's nightly fetch, when midnight has passed since the
+      // last one. A new forecast redraws the clock face's weather line.
+      const bool weatherNew = weather::nightly::runIfDue();
+      if (weatherNew) clockapp::sleep::weatherChanged();
+      if (timerBroughtSomething || clockapp::sleep::repaintDue() || (weatherNew && clockapp::sleep::enabled())) {
         // A new message arrived, and drawing it needs the display and the fonts
         // that this path deliberately skipped. Breaking out of the switch lets
         // setup() finish, which paints and then sleeps again through

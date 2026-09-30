@@ -40,7 +40,8 @@ void draw(GfxRenderer& renderer);
 bool repaintDue();
 
 // The RTC alarm to arm, in microseconds, for Live's number (0 = none) and the
-// build's fallback, with the clock's own minute folded in. Records whether the
+// build's fallback, with the clock's own minute and the Weather app's nightly
+// fetch folded in. Records whether the
 // wake it ends belongs to Live (liveOwnsTimer). Every deep sleep arms through
 // this, so the clock never loses its minute to a sleep that forgot it.
 uint64_t armMicros(uint32_t liveSeconds, uint64_t fallbackMicros);
@@ -52,6 +53,10 @@ bool liveOwnsTimer();
 // A boot that shows somebody a UI has put something else on the glass, so the
 // next minute must not diff against a face that is no longer there.
 void forgetGlass();
+
+// The nightly fetch wrote a new forecast: the weather line is read again on
+// the next draw rather than at the top of the hour.
+void weatherChanged();
 
 }  // namespace sleep
 }  // namespace clockapp

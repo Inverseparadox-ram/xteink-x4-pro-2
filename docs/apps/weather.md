@@ -93,6 +93,22 @@ The export under `/Weather` is one-way and never read back. Reading it would
 mean merging two copies with a clock this device cannot trust, and getting that
 wrong loses what the service already has.
 
+## The nightly fetch
+
+Every night just after midnight the reader wakes itself, joins the saved Wi-Fi,
+fetches every saved place again (the first four), rewrites each cache and
+report, and goes back to sleep, so the morning opens on today's forecast and
+the Clock sleep screen's weather line never runs out. It uses the same RTC
+alarm as Live and the clock (`ClockSleep::armMicros`, the earliest of the
+three wins) and Live's headless join, which steps aside for Developer Mode.
+
+The rule is `weather::nightlySecondsUntilDue` (tested in host-tests/weather):
+due when no fetch has worked yet today, retried hourly after a failed try
+rather than on every wake, and recorded in `/.crosspoint/weather/nightly.txt`.
+If the reader was awake at midnight it fetches a few seconds after it next
+goes to sleep. It needs a saved place, a set clock and a saved Wi-Fi network,
+and does nothing without them.
+
 ## Testing it without a network
 
 `WeatherFetch` takes its base URLs from `CROSSPLAY_WEATHER_BASE` and

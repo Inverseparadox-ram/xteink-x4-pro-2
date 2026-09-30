@@ -155,6 +155,41 @@ unlock button that verifies fine and never works.
 | `crossplay-unlock status` | what it has, and whether the screen is locked right now |
 | `crossplay-unlock forget` | delete both from the Keychain |
 | `crossplay-unlock run` | serve challenges; what launchd runs |
+| `crossplay-unlock claude-setup` | add the hook that feeds the reader's CLAUDE page to `~/.claude/settings.json` (once) |
+| `crossplay-unlock services` | print what each line of `services.txt` finds right now |
+| `crossplay-unlock claude-hook` | what Claude Code runs on each event; not for typing |
+
+## The CLAUDE and MAC pages
+
+The reader's remote has three pages, stepped through by the arrow on its band:
+the controls, **CLAUDE** and **MAC**.
+
+**CLAUDE** lists the Claude Code sessions on this Mac with one word each:
+*in process*, *awaiting input*, *completed* or *failed*. It is fed by Claude
+Code's own hooks, installed once:
+
+    crossplay-unlock claude-setup
+
+That adds `crossplay-unlock claude-hook` to `~/.claude/settings.json` for
+UserPromptSubmit, PreToolUse (AskUserQuestion and ExitPlanMode only),
+PostToolUse, Notification, Stop and SessionEnd, keeping everything already in
+the file and a copy of it as `settings.json.crossplay-backup`. Each event
+rewrites one line of `claude-sessions.json` beside the ledger; the agent reads
+it every three seconds. A session is *awaiting input* when Claude asks a
+question, wants a permission or waits on a plan; *completed* when its turn
+ends; *failed* when its `claude` process disappears mid-turn. Completed rows
+leave after a day, failed after two hours, closed sessions at once. The title
+is the one Claude Code gave the session, else its first prompt. Sessions
+already open before the setup appear from their next prompt.
+
+**MAC** lists your own background services from `services.txt` beside the
+ledger (`~/Library/Application Support/CrossPlayUnlock/`), one per line as
+`NAME | CHECK`, checked every thirty seconds. A check is `launchd <label>`,
+`process <text>` (a command line containing it), `docker <container>`,
+`http <url>` or `self`. The file is written on first run with guesses for
+Ambient tasks, Immich, Voice typing, Wake TV and Remote unlock: **edit the
+checks to match how each actually runs here**, then run
+`crossplay-unlock services` to see what each finds.
 
 ## Keyboard layout
 
@@ -175,6 +210,7 @@ Two characteristics on one service, and every byte is defined by
 | challenge (notify) | `6F1B0A01-...` -- 58 bytes, reader to Mac |
 | response (write) | `6F1B0A02-...` -- 11 bytes plus payload plus 32, Mac to reader |
 | now playing (write) | `6F1B0A03-...` -- up to 132 bytes, Mac to reader; `RemoteCore.h` has the layout |
+| status (write) | `6F1B0A06-...` -- one board row per write, up to 87 bytes; `RemoteCore.h`, "Status boards" |
 
 `host-tests/remotevault` proves that header against RFC 4231, RFC 7914 and
 FIPS 180-4. If this agent and the reader ever disagree, one of them has drifted

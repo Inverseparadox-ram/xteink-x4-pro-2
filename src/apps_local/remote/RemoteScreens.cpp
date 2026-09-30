@@ -25,7 +25,7 @@ fui::TextStyle plain(const fui::FontId font, const fui::TextAlign align = fui::T
   return style;
 }
 
-void chrome(toybox::Screen& screen, const char* title, const char* rightLabel, const bool offerForget) {
+void chrome(toybox::Screen& screen, const char* title, const char* rightLabel, const bool offerNextPage) {
   fui::HeaderProps header;
   header.title = title;
   header.rightLabel = rightLabel;
@@ -36,9 +36,11 @@ void chrome(toybox::Screen& screen, const char* title, const char* rightLabel, c
     header.subtitleText.color = fui::Color::White;
     header.subtitleText.align = fui::TextAlign::Right;
   }
-  if (offerForget) {
-    header.trailingIcon = fui::bitmapFromIcon(icon_remote_unlink_32);
-    header.trailingAction = ActionForget;
+  if (offerNextPage) {
+    // The page arrow. Unpair used to live here and moved to the MAC page's
+    // foot: it is used once per Mac, and this is the control used every visit.
+    header.trailingIcon = fui::bitmapFromIcon(icon_rc_page_32);
+    header.trailingAction = ActionNextPage;
     // Styled for the BAND. Left unset it resolves to the page palette, which
     // is a black glyph on a black fill -- drawn, tappable and invisible.
     header.trailingStyles = toybox::bandOutlineStyles();
@@ -93,7 +95,7 @@ const freeink::Icon& unlockIcon(const UnlockFace face) {
 }  // namespace
 
 void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
-  chrome(screen, "REMOTE", nullptr, true);
+  chrome(screen, "REMOTE", pageLabel(0), true);
 
   const fui::DeviceContext& device = screen.device();
   const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
@@ -358,6 +360,109 @@ void buildPair(toybox::Screen& screen, const PairModel& model) {
   done.label = "TYPED IT";
   done.action = ActionPairDone;
   screen.button(done, fui::makeRect(toybox::kMargin, footerY, width, kFooterHeight));
+}
+
+// --- Pages 2 and 3 -----------------------------------------------------------
+
+const char* pageLabel(const int page) {
+  static constexpr const char* kLabels[kPageCount] = {"1/3", "2/3", "3/3"};
+  return page >= 0 && page < kPageCount ? kLabels[page] : "";
+}
+
+void buildStatusPage(toybox::Screen& screen, const StatusPageModel& model) {
+  chrome(screen, model.title, pageLabel(model.page), true);
+  const fui::DeviceContext& device = screen.device();
+  fui::DrawTarget& target = screen.target();
+  const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
+  const int16_t gutter = static_cast<int16_t>(toybox::kGutter);
+  const int16_t lineH = target.lineHeight(toybox::kUiFont);
+  const int16_t smallH = target.lineHeight(toybox::kSmallFont);
+  int16_t bottom = static_cast<int16_t>(device.height - toybox::kMargin);
+
+  if (model.offerForget) {
+    // Unpair, at the foot of the MAC page: smaller than a primary action and
+    // outlined, because it undoes the pairing.
+    const int16_t w = static_cast<int16_t>(width / 2);
+    const int16_t y = static_cast<int16_t>(bottom - kFooterHeight);
+    fui::ButtonProps forget;
+    forget.icon = fui::bitmapFromIcon(icon_remote_unlink_32);
+    forget.iconSize = 32;
+    forget.label = "UNPAIR";
+    forget.action = ActionForget;
+    forget.styles = toybox::rowStyles();
+    screen.button(forget, fui::makeRect(static_cast<int16_t>(toybox::kMargin + (width - w) / 2), y, w, kFooterHeight));
+    bottom = static_cast<int16_t>(y - gutter);
+  }
+
+  int16_t y = static_cast<int16_t>(kBodyTop);
+  const auto sentence = [&](const char* text) {
+    target.text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 4)), text,
+                plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 4));
+  };
+  if (!model.helperConnected) {
+    sentence("The Mac helper is not connected. Run crossplay-unlock on the Mac, then open this page again.");
+    return;
+  }
+  if (model.board == nullptr || !model.board->known) {
+    sentence("Waiting for the Mac...");
+    return;
+  }
+  if (model.board->count == 0) {
+    sentence(model.emptyLine);
+    return;
+  }
+
+  // One row per item: the name and a detail line on the left, the status word
+  // on the right. The two that want a person -- awaiting input and failed --
+  // are set in reverse, so they are found from across a desk.
+  const fui::TextStyle nameStyle = plain(toybox::kUiFont, fui::TextAlign::Left);
+  const fui::TextStyle detailStyle = plain(toybox::kSmallFont, fui::TextAlign::Left, fui::Color::DarkGray);
+  const fui::TextStyle wordStyle = plain(toybox::kSmallFont, fui::TextAlign::Center);
+  const fui::TextStyle wordInverse = plain(toybox::kSmallFont, fui::TextAlign::Center, fui::Color::White);
+  const int16_t rowH = static_cast<int16_t>(lineH + smallH + gutter);
+  // The widest word decides the column, so every status sits in one column.
+  int16_t wordW = 0;
+  for (uint8_t i = 0; i < model.board->count; ++i) {
+    const char* word = remote::statusWord(model.board->rows[i].status);
+    const int16_t w = target.measureText(wordStyle.font, word, wordStyle).width;
+    if (w > wordW) wordW = w;
+  }
+  wordW = static_cast<int16_t>(wordW + 2 * gutter);
+  const int16_t nameW = static_cast<int16_t>(width - wordW - gutter);
+  const int16_t pillH = static_cast<int16_t>(smallH + 8);
+
+  int shown = 0;
+  for (uint8_t i = 0; i < model.board->count; ++i) {
+    if (y + rowH > bottom) break;
+    const remote::StatusRow& row = model.board->rows[i];
+    target.text(fui::makeRect(toybox::kMargin, y, nameW, lineH),
+                toybox::fitLines(target, row.title, nameW, 1, nameStyle).c_str(), nameStyle);
+    if (row.detail[0] != '\0') {
+      target.text(fui::makeRect(toybox::kMargin, static_cast<int16_t>(y + lineH), nameW, smallH),
+                  toybox::fitLines(target, row.detail, nameW, 1, detailStyle).c_str(), detailStyle);
+    }
+    const fui::Rect pill = fui::makeRect(static_cast<int16_t>(toybox::kMargin + width - wordW),
+                                         static_cast<int16_t>(y + (lineH + smallH - pillH) / 2), wordW, pillH);
+    const char* word = remote::statusWord(row.status);
+    if (remote::statusNeedsAttention(row.status)) {
+      target.fill(pill, fui::Paint::solid(fui::Color::Black), 6);
+      target.text(pill, word, wordInverse);
+    } else {
+      target.stroke(pill, fui::Paint::solid(fui::Color::Black), 1, 6);
+      target.text(pill, word, wordStyle);
+    }
+    y = static_cast<int16_t>(y + rowH);
+    ++shown;
+    if (i + 1 < model.board->count && y + rowH <= bottom) {
+      target.fill(fui::makeRect(toybox::kMargin, static_cast<int16_t>(y - gutter / 2), width, 1),
+                  fui::Paint::solid(fui::Color::Black));
+    }
+  }
+  if (shown < model.board->count) {
+    char more[24];
+    std::snprintf(more, sizeof(more), "+%d more", model.board->count - shown);
+    target.text(fui::makeRect(toybox::kMargin, y, width, smallH), more, detailStyle);
+  }
 }
 
 }  // namespace remoteui

@@ -72,7 +72,9 @@ namespace {
 // Copies a field and makes it safe to hand to the renderer: cut to whole UTF-8
 // characters, and every control character -- a newline in a track name is the
 // realistic one -- replaced with a space so it cannot break the row's layout.
-void copyField(const uint8_t* src, const size_t len, char (&dst)[kNowPlayingFieldMax + 1]) {
+template <size_t N>
+void copyField(const uint8_t* src, size_t len, char (&dst)[N]) {
+  if (len > N - 1) len = N - 1;
   const size_t keep = utf8CompleteLength(reinterpret_cast<const char*>(src), len);
   for (size_t i = 0; i < keep; ++i) {
     const uint8_t c = src[i];
@@ -191,6 +193,114 @@ bool decodeMacState(const uint8_t* data, const size_t len, MacState& out) {
   out.known = true;
   out.microphonesMuted = (data[1] & kMacStateMicMuted) != 0;
   return true;
+}
+
+// --- Status boards --------------------------------------------------------
+
+const char* statusWord(const StatusCode code) {
+  switch (code) {
+    case StatusCode::InProcess:
+      return "in process";
+    case StatusCode::AwaitingInput:
+      return "awaiting input";
+    case StatusCode::Completed:
+      return "completed";
+    case StatusCode::Failed:
+      return "failed";
+    case StatusCode::Running:
+      return "running";
+    case StatusCode::Stopped:
+      return "stopped";
+    case StatusCode::Unknown:
+      break;
+  }
+  return "unknown";
+}
+
+bool statusNeedsAttention(const StatusCode code) {
+  return code == StatusCode::AwaitingInput || code == StatusCode::Failed;
+}
+
+size_t encodeStatusRow(const StatusBoardId board, const uint8_t count, const uint8_t index, const StatusRow& row,
+                       uint8_t* out, const size_t size) {
+  size_t titleLen = std::strlen(row.title);
+  size_t detailLen = std::strlen(row.detail);
+  if (titleLen > kStatusTitleMax) titleLen = kStatusTitleMax;
+  if (detailLen > kStatusDetailMax) detailLen = kStatusDetailMax;
+  titleLen = utf8CompleteLength(row.title, titleLen);
+  detailLen = utf8CompleteLength(row.detail, detailLen);
+  const size_t need = 6 + titleLen + 1 + detailLen;
+  if (out == nullptr || size < need) return 0;
+  out[0] = kStatusVersion;
+  out[1] = static_cast<uint8_t>(board);
+  out[2] = count;
+  out[3] = index;
+  out[4] = static_cast<uint8_t>(row.status);
+  out[5] = static_cast<uint8_t>(titleLen);
+  std::memcpy(out + 6, row.title, titleLen);
+  out[6 + titleLen] = static_cast<uint8_t>(detailLen);
+  std::memcpy(out + 6 + titleLen + 1, row.detail, detailLen);
+  return need;
+}
+
+bool StatusAssembler::feed(const uint8_t* data, const size_t len) {
+  if (data == nullptr || len < 7 || len > kStatusFrameMax || data[0] != kStatusVersion) return false;
+  const uint8_t boardId = data[1];
+  if (boardId != static_cast<uint8_t>(StatusBoardId::Claude) &&
+      boardId != static_cast<uint8_t>(StatusBoardId::Services)) {
+    return false;
+  }
+  const size_t b = boardId - 1;
+  const uint8_t count = data[2];
+  const uint8_t index = data[3];
+  const uint8_t status = data[4];
+  const size_t titleLen = data[5];
+  if (count > kStatusRowsMax || status > static_cast<uint8_t>(StatusCode::Stopped)) return false;
+  if (titleLen > kStatusTitleMax || 6 + titleLen >= len) return false;
+  const size_t detailLen = data[6 + titleLen];
+  if (detailLen > kStatusDetailMax || 6 + titleLen + 1 + detailLen != len) return false;
+
+  if (count == 0) {
+    // An empty board is one frame, and it is complete on arrival.
+    shown_[b] = StatusBoard{};
+    shown_[b].known = true;
+    expected_[b] = 0;
+    return true;
+  }
+  if (index >= count) return false;
+  if (index == 0) {
+    pending_[b] = StatusBoard{};
+    pending_[b].count = count;
+    expected_[b] = 0;
+  }
+  if (index != expected_[b] || pending_[b].count != count) {
+    // Out of step: drop what was collected and wait for the next board.
+    expected_[b] = 0;
+    pending_[b] = StatusBoard{};
+    return false;
+  }
+  StatusRow& row = pending_[b].rows[index];
+  row.status = static_cast<StatusCode>(status);
+  copyField(data + 6, titleLen, row.title);
+  copyField(data + 6 + titleLen + 1, detailLen, row.detail);
+  expected_[b] = static_cast<uint8_t>(index + 1);
+  if (expected_[b] < count) return false;
+  shown_[b] = pending_[b];
+  shown_[b].known = true;
+  expected_[b] = 0;
+  return true;
+}
+
+const StatusBoard& StatusAssembler::board(const StatusBoardId id) const {
+  return shown_[id == StatusBoardId::Claude ? 0 : 1];
+}
+
+void StatusAssembler::forget() {
+  for (size_t b = 0; b < 2; ++b) {
+    shown_[b] = StatusBoard{};
+    pending_[b] = StatusBoard{};
+    expected_[b] = 0;
+  }
 }
 
 }  // namespace remote

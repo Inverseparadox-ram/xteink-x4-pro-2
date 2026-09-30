@@ -103,6 +103,13 @@ bool sendCommand(MacCommand command);
 // so the microphone button never claims a state it can no longer be told.
 bool takeMacState(MacState& out);
 
+// Pages 2 and 3: drains the status rows the helper has written and returns
+// true when a whole board changed, which is the activity's cue to repaint.
+// statusBoards() is then the latest complete boards; they are forgotten, and
+// reported as a change, when the helper goes away.
+bool takeStatus();
+const StatusAssembler& statusBoards();
+
 // The hardware entropy source, wrapped here so the activity need not include
 // an ESP header to build a nonce. A nonce drawn from millis() would repeat
 // across a reboot and repeat the keystream with it.

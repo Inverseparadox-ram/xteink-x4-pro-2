@@ -103,6 +103,9 @@ class RemoteActivity final : public Activity {
 
   // What the Mac last reported about its microphones.
   remote::MacState macState_;
+  // Which page of the REMOTE / CLAUDE / MAC trio is on screen. Not persisted:
+  // the remote opens on its controls, which is what it is opened for.
+  int page_ = 0;
 
   // Whether the helper was subscribed at the last loop, so its arrival --
   // the app opening, the Mac reconnecting -- can trigger a status check.
@@ -127,6 +130,7 @@ class RemoteActivity final : public Activity {
   // one. Kept here because UNPAIR sits where a control was a moment earlier.
   static constexpr uint32_t kSettleMs = 600;
   Phase lastShownPhase_ = Phase::Remote;
+  int lastShownPage_ = 0;
   uint32_t phaseShownAtMs_ = 0;
   bool everShown_ = false;
 };

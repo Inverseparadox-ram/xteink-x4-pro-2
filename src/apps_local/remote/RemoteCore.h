@@ -166,4 +166,79 @@ size_t utf8CompleteLength(const char* text, size_t len);
 
 bool sameNowPlaying(const NowPlaying& a, const NowPlaying& b);
 
+// --- Status boards --------------------------------------------------------
+//
+// Pages 2 and 3 of the remote: what the Claude Code sessions on the Mac are
+// doing, and whether the Mac's own background services are up. The helper
+// sends a board as ROWS, one GATT write each, so no single write is large and
+// a board can grow without a bigger characteristic:
+//
+//   [0] version  kStatusVersion
+//   [1] board    StatusBoardId
+//   [2] count    rows in this board, at most kStatusRowsMax (0 = empty)
+//   [3] index    this row, 0..count-1 (0 in an empty board)
+//   [4] status   StatusCode
+//   [5] n        title length, at most kStatusTitleMax
+//   [6..6+n)     title, UTF-8
+//   [6+n] m      detail length, at most kStatusDetailMax
+//   [..+m)       detail, UTF-8
+//
+// A board is shown only once its LAST row has arrived, so the page never draws
+// half of one board over half of another. Display only, like now playing: the
+// characteristic needs an encrypted link, and a forged row prints a wrong word.
+
+inline constexpr uint8_t kStatusVersion = 1;
+inline constexpr size_t kStatusRowsMax = 10;
+inline constexpr size_t kStatusTitleMax = 48;
+inline constexpr size_t kStatusDetailMax = 32;
+inline constexpr size_t kStatusFrameMax = 6 + kStatusTitleMax + 1 + kStatusDetailMax;
+
+enum class StatusBoardId : uint8_t { Claude = 1, Services = 2 };
+
+enum class StatusCode : uint8_t {
+  Unknown = 0,
+  InProcess = 1,      // Claude is working on it
+  AwaitingInput = 2,  // Claude asked something: a permission, or it is idle on a prompt
+  Completed = 3,      // the turn finished
+  Failed = 4,         // the session died mid-turn, or the service exited with an error
+  Running = 5,
+  Stopped = 6,
+};
+
+// The word the page prints: "in process", "awaiting input", "completed"...
+const char* statusWord(StatusCode code);
+
+// Whether the row wants a person: the page draws these in reverse.
+bool statusNeedsAttention(StatusCode code);
+
+struct StatusRow {
+  StatusCode status = StatusCode::Unknown;
+  char title[kStatusTitleMax + 1] = {};
+  char detail[kStatusDetailMax + 1] = {};
+};
+
+struct StatusBoard {
+  bool known = false;  // a whole board has arrived since the helper connected
+  uint8_t count = 0;
+  StatusRow rows[kStatusRowsMax];
+};
+
+size_t encodeStatusRow(StatusBoardId board, uint8_t count, uint8_t index, const StatusRow& row, uint8_t* out,
+                       size_t size);
+
+// Collects rows into boards. feed() returns true when a board just became
+// complete; take it with board(). A row out of order, from a different count,
+// or malformed abandons the board being collected rather than guessing.
+class StatusAssembler {
+ public:
+  bool feed(const uint8_t* data, size_t len);
+  const StatusBoard& board(StatusBoardId id) const;
+  void forget();  // the helper went away: nothing is known any more
+
+ private:
+  StatusBoard shown_[2];
+  StatusBoard pending_[2];
+  uint8_t expected_[2] = {0, 0};  // the next index each pending board wants
+};
+
 }  // namespace remote

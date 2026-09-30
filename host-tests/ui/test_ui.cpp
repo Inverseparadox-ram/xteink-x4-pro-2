@@ -10334,7 +10334,9 @@ void testEveryRemoteControlIsLive() {
   CHECK(out.has(remoteui::ActionVolumeDown));
   CHECK(out.has(remoteui::ActionMute));
   CHECK(out.has(remoteui::ActionProfile));
-  CHECK(out.has(remoteui::ActionForget));
+  CHECK(out.has(remoteui::ActionNextPage));
+  CHECK(!out.has(remoteui::ActionForget));
+  CHECK(drewText(out, "1/3"));
   CHECK(!out.interactions.overflowed());
 
   // The panel is marks. Every one of these words used to sit on a button face
@@ -10359,6 +10361,63 @@ void testEveryRemoteControlIsLive() {
 // registered with a 44px minimum touch rect that the mute button then had to
 // out-rank, and a control the router hands to its neighbour is a button that
 // does nothing for a reason no screenshot shows.
+// Pages 2 and 3: a list with a status word per row, the arrow on every page,
+// unpair only on the MAC page, and words instead of an empty page when the
+// helper is missing.
+void testTheRemoteStatusPages() {
+  remote::StatusAssembler boards;
+  const char* titles[3] = {"Add the stocks sleep screen", "Refactor importer", "Write the README"};
+  const remote::StatusCode codes[3] = {remote::StatusCode::AwaitingInput, remote::StatusCode::InProcess,
+                                       remote::StatusCode::Completed};
+  for (uint8_t i = 0; i < 3; ++i) {
+    remote::StatusRow row;
+    row.status = codes[i];
+    std::snprintf(row.title, sizeof(row.title), "%s", titles[i]);
+    std::snprintf(row.detail, sizeof(row.detail), "%s", "xteink");
+    uint8_t frame[remote::kStatusFrameMax];
+    const size_t len = remote::encodeStatusRow(remote::StatusBoardId::Claude, 3, i, row, frame, sizeof(frame));
+    boards.feed(frame, len);
+  }
+
+  const auto build = [](Rendered& out, const remoteui::StatusPageModel& model) {
+    const fui::DeviceContext ctx = device();
+    const fui::InputSnapshot noInput{};
+    toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+    toybox::Screen screen(frame, toybox::themeTokens());
+    remoteui::buildStatusPage(screen, model);
+  };
+
+  Rendered claude;
+  remoteui::StatusPageModel model;
+  model.title = "CLAUDE";
+  model.page = 1;
+  model.board = &boards.board(remote::StatusBoardId::Claude);
+  model.helperConnected = true;
+  build(claude, model);
+  CHECK(drewText(claude, "Add the stocks sleep screen"));
+  CHECK(drewText(claude, "awaiting input"));
+  CHECK(drewText(claude, "in process"));
+  CHECK(drewText(claude, "completed"));
+  CHECK(drewText(claude, "2/3"));
+  CHECK(claude.has(remoteui::ActionNextPage));
+  CHECK(!claude.has(remoteui::ActionForget));
+
+  Rendered mac;
+  model.title = "MAC";
+  model.page = 2;
+  model.board = &boards.board(remote::StatusBoardId::Services);
+  model.offerForget = true;
+  build(mac, model);
+  CHECK(mac.has(remoteui::ActionForget));
+  CHECK(mac.has(remoteui::ActionNextPage));
+  CHECK(drewText(mac, "Waiting for the Mac..."));
+
+  Rendered away;
+  model.helperConnected = false;
+  build(away, model);
+  CHECK(drewText(away, "The Mac helper is not connected. Run crossplay-unlock on the Mac, then open this page again."));
+}
+
 void testEveryRemoteControlWinsItsOwnCentre() {
   Rendered out;
   remoteui::RemoteModel model;
@@ -15928,6 +15987,7 @@ int main() {
   testASixRowMonthDrawsEveryDay();
   testAnUnsetClockSaysSoRatherThanGuessing();
   testEveryRemoteControlIsLive();
+  testTheRemoteStatusPages();
   testStocksListRowsAreLive();
   testStocksEditAndEmpty();
   testStocksDetailBothSpans();

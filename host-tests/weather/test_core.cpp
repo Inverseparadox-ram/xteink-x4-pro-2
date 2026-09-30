@@ -346,6 +346,26 @@ static void testTheSleepClockGlance() {
   CHECK(!weather::glanceAt(r, "junk").valid, "bad clock string");
 }
 
+static void testTheNightlyFetchSchedule() {
+  weather::Nightly n;
+  // Never fetched: due now.
+  CHECK(weather::nightlySecondsUntilDue(n, "2026-09-30", 10 * 3600, 1790764920) == 0, "first night is due");
+  // Fetched today: next is 30s past the coming midnight.
+  n.doneDate = "2026-09-30";
+  n.lastAttempt = 1790700000;
+  CHECK(weather::nightlySecondsUntilDue(n, "2026-09-30", 23 * 3600, 1790764920) == 3630, "after midnight");
+  CHECK(weather::nightlySecondsUntilDue(n, "2026-09-30", 0, 1790764920) == 86430, "just done at midnight");
+  // A new day: due, unless a try failed less than an hour ago.
+  CHECK(weather::nightlySecondsUntilDue(n, "2026-10-01", 60, 1790800000) == 0, "new day is due");
+  n.lastAttempt = 1790800000 - 600;
+  CHECK(weather::nightlySecondsUntilDue(n, "2026-10-01", 60, 1790800000) == 3000, "retry in an hour");
+  // Round trip.
+  weather::Nightly back;
+  CHECK(weather::parseNightly(weather::serializeNightly(n), back), "parses");
+  CHECK(back.doneDate == n.doneDate && back.lastAttempt == n.lastAttempt, "round trip");
+  CHECK(weather::parseNightly("", back) && back.doneDate.empty() && back.lastAttempt == 0, "empty file");
+}
+
 int main() {
   testCodes();
   testCompass();
@@ -357,6 +377,7 @@ int main() {
   testAbsenceSurvivesToTheExport();
   testExportCarriesTheWholeForecast();
   testTheSleepClockGlance();
+  testTheNightlyFetchSchedule();
   // The shape scripts_local/check.sh counts with grep -c "checks, 0 failed".
   std::printf("%s  weather core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;

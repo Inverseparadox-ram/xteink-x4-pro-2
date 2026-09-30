@@ -244,4 +244,28 @@ struct Glance {
 // the place's own local time (the forecast is fetched with timezone=auto).
 Glance glanceAt(const Reading& reading, const std::string& nowLocal);
 
+// --- The nightly fetch -----------------------------------------------------
+//
+// Every saved place is fetched again just after midnight, with the reader
+// asleep, so the morning opens on today's forecast and the Clock sleep
+// screen's weather line never runs out. The device wakes itself for it (the
+// same RTC alarm Live and the clock use), joins the saved Wi-Fi, fetches, and
+// goes back down. A night with no network is retried hourly, not every minute.
+
+struct Nightly {
+  std::string doneDate;     // "2026-09-30": the day a nightly fetch last worked
+  int64_t lastAttempt = 0;  // UTC seconds of the last try, worked or not
+};
+
+inline constexpr uint32_t kNightlyRetrySeconds = 3600;
+
+std::string serializeNightly(const Nightly& nightly);
+bool parseNightly(const std::string& text, Nightly& out);
+
+// Seconds until the next fetch is due, 0 when it is due now. `today` is the
+// local date and `secondsIntoDay` the local time of day; the next due moment
+// after a good fetch is 30 seconds past the coming midnight.
+uint32_t nightlySecondsUntilDue(const Nightly& nightly, const std::string& today, int32_t secondsIntoDay,
+                                int64_t nowEpoch);
+
 }  // namespace weather

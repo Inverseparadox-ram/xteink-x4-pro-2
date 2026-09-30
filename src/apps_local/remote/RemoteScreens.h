@@ -21,6 +21,7 @@
 #include <cstdint>
 
 #include "../ui/ToyboxScreen.h"
+#include "RemoteCore.h"
 
 namespace remoteui {
 
@@ -44,6 +45,7 @@ enum : fui::ActionId {
   ActionForgetConfirm = 392,
   ActionForgetCancel = 393,
   ActionVolumeDown = 394,
+  ActionNextPage = 395,
   ActionPairDone = 398,
 };
 
@@ -109,6 +111,31 @@ struct RemoteModel {
 };
 
 void buildRemote(toybox::Screen& screen, const RemoteModel& model);
+
+// --- Pages 2 and 3 -----------------------------------------------------------
+//
+// Three pages, stepped through by the arrow on the band: REMOTE, CLAUDE (what
+// the Claude Code sessions on the Mac are doing) and MAC (whether its own
+// background services are up). Only the first has controls; the other two are
+// lists the helper keeps current, and they say so when there is no helper to
+// ask rather than drawing an empty page that looks like "nothing running".
+
+inline constexpr int kPageCount = 3;
+
+// "1/3" on the band, beside the arrow. Every page's header is built from this
+// so the three can never disagree about where they are.
+const char* pageLabel(int page);
+
+struct StatusPageModel {
+  const char* title = "";  // "CLAUDE", "MAC"
+  int page = 1;            // 0-based
+  const remote::StatusBoard* board = nullptr;
+  bool helperConnected = false;
+  const char* emptyLine = "";  // what an empty board means, in words
+  bool offerForget = false;    // the MAC page carries the unpair control
+};
+
+void buildStatusPage(toybox::Screen& screen, const StatusPageModel& model);
 
 // The confirm in front of clearing the bonds. Destructive in the sense that
 // matters here: the Mac has to be told to forget the device too, and until it

@@ -610,4 +610,40 @@ Glance glanceAt(const Reading& reading, const std::string& nowLocal) {
   return out;
 }
 
+// --- The nightly fetch -----------------------------------------------------
+
+std::string serializeNightly(const Nightly& nightly) {
+  return "done " + nightly.doneDate + "\nattempt " + std::to_string(nightly.lastAttempt) + "\n";
+}
+
+bool parseNightly(const std::string& text, Nightly& out) {
+  Nightly n;
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t end = text.find('\n', pos);
+    if (end == std::string::npos) end = text.size();
+    const std::string line = text.substr(pos, end - pos);
+    pos = end + 1;
+    if (line.rfind("done ", 0) == 0) {
+      n.doneDate = line.substr(5, 10);
+    } else if (line.rfind("attempt ", 0) == 0) {
+      n.lastAttempt = std::strtoll(line.c_str() + 8, nullptr, 10);
+    }
+  }
+  out = n;
+  return true;
+}
+
+uint32_t nightlySecondsUntilDue(const Nightly& nightly, const std::string& today, int32_t secondsIntoDay,
+                                const int64_t nowEpoch) {
+  if (secondsIntoDay < 0) secondsIntoDay = 0;
+  if (secondsIntoDay > 86399) secondsIntoDay = 86399;
+  if (!today.empty() && nightly.doneDate == today) return static_cast<uint32_t>(86400 - secondsIntoDay + 30);
+  const int64_t since = nowEpoch - nightly.lastAttempt;
+  if (nightly.lastAttempt > 0 && since >= 0 && since < kNightlyRetrySeconds) {
+    return static_cast<uint32_t>(kNightlyRetrySeconds - since);
+  }
+  return 0;
+}
+
 }  // namespace weather

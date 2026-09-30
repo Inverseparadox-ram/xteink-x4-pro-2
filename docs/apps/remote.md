@@ -293,6 +293,29 @@ it decides nothing: the worst a forged frame could do is print a wrong song,
 and the characteristic requires an encrypted link, which in practice means the
 bonded Mac.
 
+## Pages 2 and 3: CLAUDE and MAC
+
+The arrow on the band steps through three pages: the controls, **CLAUDE** and
+**MAC**. Unpair moved off the band to make room and sits at the foot of MAC; it
+is used once per Mac, and the arrow every visit.
+
+Both pages are lists the Mac helper keeps current over a fourth encrypted
+characteristic, `6F1B0A06`, one row per write (`RemoteCore.h`, "Status
+boards"). A board is drawn only when its last row has arrived, so the page
+never shows half of one list over half of another. Each row is a name, a detail
+line and one status word; *awaiting input* and *failed* are set in reverse,
+because those are the ones that want a person.
+
+- **CLAUDE**: every Claude Code session on the Mac, *awaiting input* and
+  *failed* first, then *in process*, then *completed*. The helper learns it
+  from Claude Code's hooks (`crossplay-unlock claude-setup`).
+- **MAC**: the services listed in the helper's `services.txt`, each *running*,
+  *stopped*, *failed* or *unknown*.
+
+With no helper connected both pages say so in words, rather than drawing an
+empty list that reads as "nothing running". See
+`tools_local/remote-mac/README.md`, "The CLAUDE and MAC pages".
+
 ## The screen is marks, not words
 
 Every control is an icon: 64px prev / play-pause / next across the top, the two
