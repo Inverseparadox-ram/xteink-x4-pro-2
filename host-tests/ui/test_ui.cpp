@@ -10446,7 +10446,7 @@ void testTheRemoteStatusPages() {
     toybox::Screen screen(frame, toybox::themeTokens());
     remoteui::RestartModel restart;
     restart.title = "Wake TV";
-    restart.detail = "failed  .  exit 1";
+    restart.detail = "failed: exit 1";
     remoteui::buildRestartConfirm(screen, restart);
   }
   CHECK(confirm.has(remoteui::ActionRestartConfirm));

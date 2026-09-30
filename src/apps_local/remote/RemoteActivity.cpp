@@ -639,7 +639,7 @@ void RemoteActivity::loop() {
       RenderLock lock(*this);
       restartRow_ = event.value;
       std::snprintf(restartTitle_, sizeof(restartTitle_), "%s", row.title);
-      std::snprintf(restartDetail_, sizeof(restartDetail_), "%s  .  %s", remote::statusWord(row.status), row.detail);
+      std::snprintf(restartDetail_, sizeof(restartDetail_), "%s: %s", remote::statusWord(row.status), row.detail);
       phase_ = Phase::Restart;
       requestUpdate();
       break;

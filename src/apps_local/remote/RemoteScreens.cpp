@@ -488,10 +488,10 @@ void buildRestartConfirm(toybox::Screen& screen, const RestartModel& model) {
   target.text(fui::makeRect(toybox::kMargin, y, width, lineH), model.detail,
               plain(toybox::kSmallFont, fui::TextAlign::Center, fui::Color::DarkGray));
   y = static_cast<int16_t>(y + lineH + toybox::kGutter);
-  target.text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 5)),
-              "The Mac runs this service's restart recipe. If it is still down after that, Claude Code looks "
-              "into it in the Service doctor chat, and the row says what it found.",
-              plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 5));
+  target.text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 7)),
+              "The Mac starts it again. If it is still down, Claude Code looks into it in the Service doctor "
+              "chat, and this row shows what it found.",
+              plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 7));
 
   const int16_t footerY = static_cast<int16_t>(device.height - toybox::kMargin - kFooterHeight);
   fui::ButtonProps restart;
