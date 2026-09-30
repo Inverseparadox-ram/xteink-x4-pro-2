@@ -54,6 +54,7 @@ class StocksActivity final : public Activity {
   void needNetwork();
   void onWifiChosen(bool connected);
   void refreshStep();
+  bool refreshBatch();
   void finishRefresh();
   void showNotice(const char* headline, std::string message);
   void back();
@@ -90,6 +91,11 @@ class StocksActivity final : public Activity {
   int fetched_ = 0;
   int done_ = 0;
   int total_ = 0;
+  // The one-request fetch has been tried for this refresh; after it, the
+  // cursor walks missing_ (the stocks it did not bring back) when useMissing_.
+  bool batchTried_ = false;
+  bool useMissing_ = false;
+  std::vector<int> missing_;
   char busyText_[48] = "";
 
   std::string noticeHeadline_;

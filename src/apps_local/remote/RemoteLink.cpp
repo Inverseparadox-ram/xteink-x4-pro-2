@@ -350,6 +350,15 @@ bool sendCommand(const MacCommand command) {
   return true;
 }
 
+bool sendRestart(const uint8_t row, const char* title) {
+  if (commandOut == nullptr || !commandSubscribed) return false;
+  uint8_t frame[kRestartLen];
+  encodeRestart(row, title, frame);
+  commandOut->setValue(frame, sizeof(frame));
+  commandOut->notify();
+  return true;
+}
+
 bool takeMacState(MacState& out) {
   uint8_t frame[kMacStateLen];
   taskENTER_CRITICAL(&nowLock);
@@ -426,6 +435,7 @@ bool take(vault::Response&) { return false; }
 void cancel() {}
 
 bool sendCommand(MacCommand) { return false; }
+bool sendRestart(uint8_t, const char*) { return false; }
 bool takeMacState(MacState&) { return false; }
 
 // CROSSPOINT_SIM_STATUS=1 hands pages 2 and 3 a plausible pair of boards, so

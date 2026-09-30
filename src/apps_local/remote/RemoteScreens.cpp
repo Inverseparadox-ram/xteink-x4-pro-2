@@ -435,6 +435,10 @@ void buildStatusPage(toybox::Screen& screen, const StatusPageModel& model) {
   for (uint8_t i = 0; i < model.board->count; ++i) {
     if (y + rowH > bottom) break;
     const remote::StatusRow& row = model.board->rows[i];
+    if (model.restartable && restartOffered(row.status)) {
+      screen.frame().hit(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(rowH - gutter / 2)),
+                         ActionRestartRow, static_cast<int16_t>(i));
+    }
     target.text(fui::makeRect(toybox::kMargin, y, nameW, lineH),
                 toybox::fitLines(target, row.title, nameW, 1, nameStyle).c_str(), nameStyle);
     if (row.detail[0] != '\0') {
@@ -463,6 +467,45 @@ void buildStatusPage(toybox::Screen& screen, const StatusPageModel& model) {
     std::snprintf(more, sizeof(more), "+%d more", model.board->count - shown);
     target.text(fui::makeRect(toybox::kMargin, y, width, smallH), more, detailStyle);
   }
+}
+
+bool restartOffered(const remote::StatusCode code) {
+  return code == remote::StatusCode::Stopped || code == remote::StatusCode::Failed ||
+         code == remote::StatusCode::Unknown;
+}
+
+void buildRestartConfirm(toybox::Screen& screen, const RestartModel& model) {
+  chrome(screen, "RESTART?", nullptr, false);
+  const fui::DeviceContext& device = screen.device();
+  fui::DrawTarget& target = screen.target();
+  const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
+  const int16_t lineH = target.lineHeight(toybox::kUiFont);
+  int16_t y = static_cast<int16_t>(kBodyTop + toybox::kMargin);
+  const fui::TextStyle name = plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::Black, 2);
+  target.text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 2)),
+              toybox::fitLines(target, model.title, width, 2, name).c_str(), name);
+  y = static_cast<int16_t>(y + lineH * 2);
+  target.text(fui::makeRect(toybox::kMargin, y, width, lineH), model.detail,
+              plain(toybox::kSmallFont, fui::TextAlign::Center, fui::Color::DarkGray));
+  y = static_cast<int16_t>(y + lineH + toybox::kGutter);
+  target.text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 5)),
+              "The Mac runs this service's restart recipe. If it is still down after that, Claude Code looks "
+              "into it in the Service doctor chat, and the row says what it found.",
+              plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 5));
+
+  const int16_t footerY = static_cast<int16_t>(device.height - toybox::kMargin - kFooterHeight);
+  fui::ButtonProps restart;
+  restart.label = "RESTART";
+  restart.action = ActionRestartConfirm;
+  screen.button(restart, fui::makeRect(toybox::kMargin, footerY, width, kFooterHeight));
+  const int16_t cancelW = static_cast<int16_t>(width / 2);
+  fui::ButtonProps cancel;
+  cancel.label = "CANCEL";
+  cancel.action = ActionRestartCancel;
+  cancel.styles = toybox::rowStyles();
+  screen.button(cancel, fui::makeRect(static_cast<int16_t>(toybox::kMargin + (width - cancelW) / 2),
+                                      static_cast<int16_t>(footerY - kFooterHeight - toybox::kMargin * 2), cancelW,
+                                      kFooterHeight));
 }
 
 }  // namespace remoteui

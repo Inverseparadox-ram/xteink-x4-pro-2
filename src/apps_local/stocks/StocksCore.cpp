@@ -264,16 +264,8 @@ void dropGaps(Series& series) {
   std::vector<Point>& points = series.points;
   size_t kept = 0;
   for (size_t i = 0; i < points.size(); ++i) {
-    const Point& p = points[i];
-    if (!(p.close > 0) || !std::isfinite(p.close)) continue;
-    points[kept] = p;
-    // A missing open, high or low is filled from the close so a candle drawn
-    // from this point is a tick rather than a bar to zero.
-    Point& k = points[kept];
-    if (!(k.open > 0) || !std::isfinite(k.open)) k.open = k.close;
-    if (!(k.high > 0) || !std::isfinite(k.high)) k.high = k.close;
-    if (!(k.low > 0) || !std::isfinite(k.low)) k.low = k.close;
-    ++kept;
+    if (!(points[i].close > 0) || !std::isfinite(points[i].close)) continue;
+    points[kept++] = points[i];
   }
   points.resize(kept);
 }
@@ -281,8 +273,13 @@ void dropGaps(Series& series) {
 Move moveOf(const Series& series) {
   Move move;
   move.to = series.price;
-  move.from = series.previousClose > 0 ? series.previousClose
-                                       : (series.points.empty() ? series.price : series.points.front().open);
+  if (series.previousClose > 0) {
+    move.from = series.previousClose;
+  } else if (series.dayOpen > 0) {
+    move.from = series.dayOpen;
+  } else {
+    move.from = series.points.empty() ? series.price : series.points.front().close;
+  }
   move.delta = move.to - move.from;
   move.percent = move.from > 0 ? move.delta / move.from * 100.0 : 0.0;
   return move;
@@ -291,13 +288,16 @@ Move moveOf(const Series& series) {
 Extremes extremesOf(const Series& series) {
   Extremes e;
   if (series.points.empty()) return e;
-  e.open = series.points.front().open;
-  e.high = series.points.front().high;
-  e.low = series.points.front().low;
+  e.open = series.dayOpen > 0 ? series.dayOpen : series.points.front().close;
+  e.high = series.points.front().close;
+  e.low = series.points.front().close;
   for (const Point& p : series.points) {
-    if (p.high > e.high) e.high = p.high;
-    if (p.low > 0 && p.low < e.low) e.low = p.low;
+    if (p.close > e.high) e.high = p.close;
+    if (p.close < e.low) e.low = p.close;
   }
+  // The service's own high and low see between the five-minute closes.
+  if (series.dayHigh > e.high) e.high = series.dayHigh;
+  if (series.dayLow > 0 && series.dayLow < e.low) e.low = series.dayLow;
   return e;
 }
 
@@ -432,7 +432,7 @@ std::string formatExchangeDay(const int64_t utcSeconds, const int32_t gmtOffset)
 
 // --- Drawing a series ----------------------------------------------------------
 
-Range rangeOf(const Series& series, const bool withHighLow) {
+Range rangeOf(const Series& series) {
   double low = 0;
   double high = 0;
   bool any = false;
@@ -448,10 +448,6 @@ Range rangeOf(const Series& series, const bool withHighLow) {
   };
   for (const Point& p : series.points) {
     take(p.close);
-    if (withHighLow) {
-      take(p.high);
-      take(p.low);
-    }
   }
   take(series.previousClose);
   take(series.price);
@@ -482,8 +478,8 @@ int16_t yFor(const double value, const Range& range, const int16_t top, const in
 
 std::string serializeSeries(const Series& series) {
   std::string out;
-  out.reserve(128 + series.points.size() * 64);
-  out += "crossplay-stocks-series 1\n";
+  out.reserve(160 + series.points.size() * 24);
+  out += "crossplay-stocks-series 2\n";
   out += "span ";
   out += series.span == Span::Today ? "today" : "days";
   out += "\nprice " + formatNumber(series.price, 12);
@@ -492,12 +488,14 @@ std::string serializeSeries(const Series& series) {
   out += "\nname " + cleanName(series.name.c_str());
   out += "\nmarket " + std::to_string(series.marketTime);
   out += "\noffset " + std::to_string(series.gmtOffset);
+  char day[96];
+  std::snprintf(day, sizeof(day), "\nday %.9g %.9g %.9g", static_cast<double>(series.dayOpen),
+                static_cast<double>(series.dayHigh), static_cast<double>(series.dayLow));
+  out += day;
   out += "\npoints " + std::to_string(series.points.size()) + "\n";
   for (const Point& p : series.points) {
-    char line[128];
-    std::snprintf(line, sizeof(line), "%lld %.9g %.9g %.9g %.9g\n", static_cast<long long>(p.time),
-                  static_cast<double>(p.open), static_cast<double>(p.high), static_cast<double>(p.low),
-                  static_cast<double>(p.close));
+    char line[48];
+    std::snprintf(line, sizeof(line), "%lu %.9g\n", static_cast<unsigned long>(p.time), static_cast<double>(p.close));
     out += line;
   }
   return out;
@@ -533,7 +531,9 @@ bool parseSeries(const std::string& text, Series& out) {
 
   std::string value;
   std::string line;
-  if (!nextLine(line) || line != "crossplay-stocks-series 1") return false;
+  // Version 1 carried an open, high and low per point. It is refused rather
+  // than converted: the next refresh rewrites it, and a cache is only a cache.
+  if (!nextLine(line) || line != "crossplay-stocks-series 2") return false;
   if (!field("span", value)) return false;
   if (value == "today") {
     s.span = Span::Today;
@@ -551,19 +551,22 @@ bool parseSeries(const std::string& text, Series& out) {
   if (!field("offset", value) || !takeInt(value.c_str(), number)) return false;
   if (number < -86400 || number > 86400) return false;
   s.gmtOffset = static_cast<int32_t>(number);
+  if (!field("day", value)) return false;
+  double o = 0, h = 0, l = 0;
+  if (std::sscanf(value.c_str(), "%lf %lf %lf", &o, &h, &l) != 3) return false;
+  s.dayOpen = static_cast<float>(o);
+  s.dayHigh = static_cast<float>(h);
+  s.dayLow = static_cast<float>(l);
   if (!field("points", value) || !takeInt(value.c_str(), number)) return false;
   if (number < 0 || static_cast<size_t>(number) > kMaxPoints) return false;
   s.points.reserve(static_cast<size_t>(number));
   for (int64_t i = 0; i < number; ++i) {
     if (!nextLine(line)) return false;
-    long long t = 0;
-    double o = 0, h = 0, l = 0, c = 0;
-    if (std::sscanf(line.c_str(), "%lld %lf %lf %lf %lf", &t, &o, &h, &l, &c) != 5) return false;
+    unsigned long t = 0;
+    double c = 0;
+    if (std::sscanf(line.c_str(), "%lu %lf", &t, &c) != 2) return false;
     Point p;
-    p.time = t;
-    p.open = static_cast<float>(o);
-    p.high = static_cast<float>(h);
-    p.low = static_cast<float>(l);
+    p.time = static_cast<uint32_t>(t);
     p.close = static_cast<float>(c);
     s.points.push_back(p);
   }

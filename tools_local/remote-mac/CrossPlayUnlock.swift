@@ -53,6 +53,9 @@ enum Wire {
     static let macLinkVersion: UInt8 = 1
     static let commandMute: UInt8 = 0x01
     static let commandUnmute: UInt8 = 0x02
+    // [version, 0x03, row, check]: restart the service on MAC-page row `row`,
+    // whose title's FNV-1a low byte is `check` (RemoteCore's serviceCheck).
+    static let commandRestart: UInt8 = 0x03
     static let flagMicrophonesMuted: UInt8 = 0x01
 
     static let version: UInt8 = 1
@@ -894,11 +897,34 @@ final class ClaudeSessions {
 //
 // services.txt, beside the ledger: one service per line, NAME | CHECK.
 
+struct ServiceLine {
+    var name: String
+    var check: String
+    var start: String  // the third field, "" when the line has none
+}
+
+// FNV-1a over the bytes the reader was sent for this title, low byte: what
+// the reader echoes with a restart so a list that moved cannot restart the
+// wrong row.
+func serviceCheck(_ title: String) -> UInt8 {
+    var hash: UInt32 = 2166136261
+    for byte in utf8Prefix(title, Wire.statusTitleMax) {
+        hash ^= UInt32(byte)
+        hash = hash &* 16777619
+    }
+    return UInt8(hash & 0xFF)
+}
+
 final class Services {
     static var path: URL { supportDirectory().appendingPathComponent("services.txt") }
+    static var logs: URL {
+        let dir = supportDirectory().appendingPathComponent("logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
 
     static let sample = """
-    # CrossPlay Remote, page 3: one service per line.   NAME | CHECK
+    # CrossPlay Remote, page 3: one service per line.   NAME | CHECK | START
     #
     # CHECK is one of:
     #   launchd <label>      a launchd job:    launchd com.example.agent
@@ -906,6 +932,14 @@ final class Services {
     #   docker <container>   a Docker container
     #   http <url>           something answering over HTTP
     #   self                 this helper
+    #
+    # START is optional: the shell command that starts it again, run when you
+    # tap RESTART on the reader. launchd and docker lines need none (it is
+    # `launchctl kickstart` / `docker start`). If the restart does not bring it
+    # back, Claude Code looks into it in the Service doctor chat.
+    #
+    # Better than a restart button: `crossplay-unlock adopt` makes macOS keep a
+    # service running by itself. See the README.
     #
     # These are guesses. Change each CHECK to match how it runs on this Mac;
     # `crossplay-unlock services` prints what each line finds right now.
@@ -918,24 +952,81 @@ final class Services {
 
     """
 
-    static func lines() -> [(name: String, check: String)] {
+    static func lines() -> [ServiceLine] {
         if !FileManager.default.fileExists(atPath: path.path) {
             try? sample.data(using: .utf8)?.write(to: path)
         }
         guard let text = try? String(contentsOf: path, encoding: .utf8) else { return [] }
-        var out: [(name: String, check: String)] = []
+        var out: [ServiceLine] = []
         for raw in text.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { continue }
-            let parts = line.split(separator: "|", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            if parts.count == 2, !parts[0].isEmpty { out.append((name: parts[0], check: parts[1])) }
+            let parts = line.split(separator: "|", maxSplits: 2).map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count >= 2, !parts[0].isEmpty {
+                out.append(ServiceLine(name: parts[0], check: parts[1], start: parts.count > 2 ? parts[2] : ""))
+            }
         }
         return out
+    }
+
+    // Rewrites the line named `name` (or appends one), keeping every other
+    // line and comment exactly as the owner wrote it.
+    static func setLine(_ name: String, _ check: String, _ start: String) {
+        _ = lines()  // writes the sample when there is no file yet
+        let text = (try? String(contentsOf: path, encoding: .utf8)) ?? ""
+        var out: [String] = []
+        var replaced = false
+        let wanted = start.isEmpty ? "\(name) | \(check)" : "\(name) | \(check) | \(start)"
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            let first = line.split(separator: "|", maxSplits: 1).first.map { $0.trimmingCharacters(in: .whitespaces) }
+            if !line.hasPrefix("#"), first == name {
+                if !replaced { out.append(wanted) }
+                replaced = true
+                continue
+            }
+            out.append(raw)
+        }
+        if !replaced {
+            while out.last == "" { out.removeLast() }
+            out.append(wanted)
+            out.append("")
+        }
+        try? out.joined(separator: "\n").data(using: .utf8)?.write(to: path)
+    }
+
+    static func removeLine(_ name: String) {
+        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return }
+        let kept = text.components(separatedBy: "\n").filter { raw in
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            let first = line.split(separator: "|", maxSplits: 1).first.map { $0.trimmingCharacters(in: .whitespaces) }
+            return line.hasPrefix("#") || first != name
+        }
+        try? kept.joined(separator: "\n").data(using: .utf8)?.write(to: path)
     }
 
     static func docker() -> String? {
         ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/Applications/Docker.app/Contents/Resources/bin/docker"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    // How a line is started again: its own START, else what its CHECK implies.
+    static func recipe(_ line: ServiceLine) -> String? {
+        if !line.start.isEmpty { return line.start }
+        let parts = line.check.split(separator: " ", maxSplits: 1).map(String.init)
+        let arg = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+        switch parts.first?.lowercased() ?? "" {
+        case "launchd":
+            let plist = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/LaunchAgents/\(arg).plist").path
+            // kickstart restarts a loaded job; bootstrap loads one that fell out.
+            return "/bin/launchctl kickstart -k gui/\(getuid())/\(arg) || /bin/launchctl bootstrap gui/\(getuid()) '\(plist)'"
+        case "docker":
+            guard let docker = docker() else { return nil }
+            return "'\(docker)' start \(arg)"
+        default:
+            return nil
+        }
     }
 
     static func check(_ check: String) -> (StatusCode, String) {
@@ -987,11 +1078,319 @@ final class Services {
         }
     }
 
+    // What a restart in progress, or its result, says in place of the check.
+    struct Override {
+        var status: StatusCode
+        var detail: String
+        var until: Date
+    }
+    private static var overrides: [String: Override] = [:]
+    private static let overrideLock = NSLock()
+
+    static func setOverride(_ name: String, _ status: StatusCode, _ detail: String, for seconds: TimeInterval) {
+        overrideLock.lock()
+        overrides[name] = Override(status: status, detail: detail, until: Date().addingTimeInterval(seconds))
+        overrideLock.unlock()
+    }
+
+    static func clearOverride(_ name: String) {
+        overrideLock.lock()
+        overrides.removeValue(forKey: name)
+        overrideLock.unlock()
+    }
+
     static func rows() -> [StatusRow] {
         lines().map { line in
             let (status, detail) = check(line.check)
+            overrideLock.lock()
+            var override = overrides[line.name]
+            if let o = override, o.until < Date() {
+                overrides.removeValue(forKey: line.name)
+                override = nil
+            }
+            overrideLock.unlock()
+            if let o = override {
+                // A result line (Claude's answer) gives way to the real state
+                // once it expires; a restart in progress always shows.
+                return StatusRow(status: o.status, title: line.name, detail: o.detail)
+            }
             return StatusRow(status: status, title: line.name, detail: detail)
         }
+    }
+
+    // RESTART from the reader. One at a time, off the main thread: the
+    // recipe first, and the Service doctor only when that did not work.
+    static let restartQueue = DispatchQueue(label: "crossplay.restart")
+
+    static func restart(row: Int, check: UInt8, changed: @escaping () -> Void) {
+        let all = lines()
+        guard row >= 0, row < min(all.count, Wire.statusRowsMax) else {
+            log("restart: no row \(row)")
+            return
+        }
+        let line = all[row]
+        guard serviceCheck(line.name) == check else {
+            log("restart: row \(row) is no longer the one the reader showed; refused")
+            return
+        }
+        restartQueue.async {
+            log("restart: \(line.name)")
+            Services.setOverride(line.name, .inProcess, "restarting", for: 600)
+            DispatchQueue.main.async(execute: changed)
+            var printed = ""
+            let startCommand = Services.recipe(line)
+            if let startCommand = startCommand {
+                let result = runTool("/bin/sh", ["-c", "\(startCommand) 2>&1"], timeout: 60)
+                printed = String(result.output.suffix(1500))
+                log("restart: recipe exited \(result.status)")
+            }
+            sleep(8)
+            let (after, afterDetail) = Services.check(line.check)
+            if after == .running {
+                Services.setOverride(line.name, .running, "restarted", for: 120)
+                DispatchQueue.main.async(execute: changed)
+                return
+            }
+            Services.setOverride(line.name, .inProcess, "asking Claude", for: 900)
+            DispatchQueue.main.async(execute: changed)
+            let answer = Doctor.ask(about: line, recipe: startCommand, printed: printed,
+                                    state: "\(after) (\(afterDetail))")
+            let (settled, _) = Services.check(line.check)
+            Services.setOverride(line.name, settled == .running ? .running : .failed, answer, for: 1800)
+            DispatchQueue.main.async(execute: changed)
+        }
+    }
+}
+
+// MARK: The Service doctor
+//
+// Claude Code, run headless on this Mac when a restart did not bring a
+// service back. Every call resumes ONE session, so all of it is a single chat
+// ("Service doctor") that remembers what it tried last time, and it shows on
+// the reader's CLAUDE page like any other session. `claude --resume <id>` in
+// a terminal opens the same conversation.
+enum Doctor {
+    static var folder: URL {
+        let dir = supportDirectory().appendingPathComponent("doctor", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+    static var sessionFile: URL { supportDirectory().appendingPathComponent("doctor-session.txt") }
+    static var toolsFile: URL { supportDirectory().appendingPathComponent("doctor-tools.txt") }
+    static var logFile: URL { Services.logs.appendingPathComponent("doctor.log") }
+
+    // What Claude may do without asking, since nobody is at the Mac to be
+    // asked. Looking, and starting and stopping services; nothing else.
+    // doctor-tools.txt, one rule per line, replaces this list.
+    static let defaultTools = [
+        "Read", "Grep", "Glob",
+        "Bash(launchctl:*)", "Bash(docker:*)", "Bash(open:*)", "Bash(ps:*)", "Bash(pgrep:*)", "Bash(pkill:*)",
+        "Bash(lsof:*)", "Bash(tail:*)", "Bash(cat:*)", "Bash(ls:*)", "Bash(log show:*)", "Bash(brew services:*)",
+        "Bash(crossplay-unlock:*)", "Bash(curl:*)",
+    ]
+
+    static func tools() -> [String] {
+        guard let text = try? String(contentsOf: toolsFile, encoding: .utf8) else { return defaultTools }
+        let rules = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        return rules.isEmpty ? defaultTools : rules
+    }
+
+    static func claudePath() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude", "/opt/homebrew/bin/claude",
+                          "/usr/local/bin/claude"]
+        if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) { return found }
+        let viaShell = runTool("/bin/zsh", ["-lc", "command -v claude"], timeout: 10).output
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return viaShell.isEmpty ? nil : viaShell
+    }
+
+    static func run(_ claude: String, _ arguments: [String]) -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: claude)
+        process.arguments = arguments
+        process.currentDirectoryURL = folder
+        var environment = ProcessInfo.processInfo.environment
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        environment["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["HOME"] = home
+        process.environment = environment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch { return (-1, "could not start claude") }
+        // Read as it arrives, so a long answer cannot fill the pipe and stall it.
+        var data = Data()
+        let reader = DispatchQueue(label: "crossplay.doctor.read")
+        let done = DispatchSemaphore(value: 0)
+        reader.async {
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            done.signal()
+        }
+        let deadline = Date().addingTimeInterval(600)
+        while process.isRunning && Date() < deadline { usleep(200_000) }
+        if process.isRunning { process.terminate() }
+        _ = done.wait(timeout: .now() + 5)
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+    }
+
+    static func ask(about line: ServiceLine, recipe: String?, printed: String, state: String) -> String {
+        guard let claude = claudePath() else {
+            log("doctor: claude is not installed where this helper can find it")
+            return "claude not found"
+        }
+        let prompt = """
+        You are the Service doctor for this Mac, run from the CrossPlay reader's RESTART button. Nobody is at \
+        the Mac to answer questions, so do not ask any.
+
+        The service "\(line.name)" is not running.
+        - How it is checked: \(line.check)
+        - How it is normally started: \(recipe ?? "not recorded")
+        - What that start command printed just now: \(printed.isEmpty ? "(nothing)" : printed)
+        - What the check says now: \(state)
+        - The services list is \(Services.path.path) (NAME | CHECK | START).
+
+        Find out why it is down and get it running again. Touch nothing unrelated to this service. If it needs \
+        a start command the list does not have, say what it should be.
+
+        End your reply with ONE line of at most 30 characters saying what you did or what is wrong; the \
+        reader shows only that line.
+        """
+        let started = FileManager.default.fileExists(atPath: sessionFile.path)
+        var id = (try? String(contentsOf: sessionFile, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if id.isEmpty { id = UUID().uuidString.lowercased() }
+        let common = ["-p", prompt, "--output-format", "text", "--allowedTools"] + tools()
+        var result = run(claude, common + (started ? ["--resume", id] : ["--session-id", id]))
+        if result.status != 0 && started {
+            // The saved session is gone (cleared, or another machine's). Start
+            // the chat again under a new id rather than failing every restart.
+            log("doctor: could not resume \(id); starting a new chat")
+            id = UUID().uuidString.lowercased()
+            result = run(claude, common + ["--session-id", id])
+        }
+        if result.status == 0 { try? id.data(using: .utf8)?.write(to: sessionFile) }
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let entry = "\n== \(stamp) \(line.name) (exit \(result.status))\n\(result.output)\n"
+        if let handle = try? FileHandle(forWritingTo: logFile) {
+            handle.seekToEndOfFile()
+            handle.write(Data(entry.utf8))
+            try? handle.close()
+        } else {
+            try? Data(entry.utf8).write(to: logFile)
+        }
+        let last = result.output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .last { !$0.isEmpty } ?? ""
+        if result.status != 0 { return "Claude failed (exit \(result.status))" }
+        return last.isEmpty ? "Claude had nothing to say" : String(last.prefix(Wire.statusDetailMax))
+    }
+}
+
+// MARK: Keeping services alive (`adopt`)
+//
+// The first line of defence: a service macOS itself keeps running, so the
+// restart button is rarely needed. `adopt` makes a launchd agent with
+// KeepAlive for a command or an app, or tells Docker to restart a container,
+// and points the service's line in services.txt at it.
+enum Adopt {
+    static func slug(_ name: String) -> String {
+        let allowed = name.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        return String(allowed).split(separator: "-").joined(separator: "-")
+    }
+
+    static func label(_ name: String) -> String { "com.crossplay.svc.\(slug(name))" }
+
+    static func plistURL(_ label: String) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    }
+
+    static func agent(name: String, arguments: [String]) {
+        let label = label(name)
+        let url = plistURL(label)
+        let logPath = Services.logs.appendingPathComponent("\(slug(name)).log").path
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let plist: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": arguments,
+            "RunAtLoad": true,
+            // Restarted whenever it exits, for any reason -- that is the point.
+            "KeepAlive": true,
+            // At most one restart every 20 seconds, so a service that dies on
+            // launch does not spin.
+            "ThrottleInterval": 20,
+            "StandardOutPath": logPath,
+            "StandardErrorPath": logPath,
+            "EnvironmentVariables": ["PATH": "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"],
+        ]
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else {
+            print("could not write the launchd file")
+            exit(1)
+        }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        runTool("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"])
+        do { try data.write(to: url) } catch {
+            print("could not write \(url.path)")
+            exit(1)
+        }
+        let loaded = runTool("/bin/launchctl", ["bootstrap", "gui/\(getuid())", url.path])
+        if loaded.status != 0 { print("launchctl could not load it (status \(loaded.status)); see \(logPath)") }
+        Services.setLine(name, "launchd \(label)", "")
+        print("\(name) now runs as \(label) and macOS restarts it whenever it stops.")
+        print("log: \(logPath)")
+    }
+
+    static func command(_ args: [String]) {
+        guard args.count >= 2 else { usage() }
+        let name = args[0]
+        switch args[1] {
+        case "--run" where args.count >= 3:
+            // Through a login shell, so the command sees the PATH it sees in
+            // Terminal. It must stay in the foreground: a command that forks
+            // and exits looks like a crash to KeepAlive, and is restarted.
+            agent(name: name, arguments: ["/bin/zsh", "-lc", args[2...].joined(separator: " ")])
+        case "--app" where args.count >= 3:
+            // open -W waits for the app to quit, so launchd sees it as running.
+            agent(name: name, arguments: ["/usr/bin/open", "-W", "-a", args[2...].joined(separator: " ")])
+        case "--docker" where args.count >= 3:
+            guard let docker = Services.docker() else {
+                print("docker was not found")
+                exit(1)
+            }
+            let result = runTool(docker, ["update", "--restart", "unless-stopped", args[2]])
+            if result.status != 0 {
+                print("docker could not update \(args[2]); is Docker running and is that the container's name?")
+                exit(1)
+            }
+            Services.setLine(name, "docker \(args[2])", "")
+            print("\(name): Docker now restarts \(args[2]) whenever it stops (and when Docker starts).")
+        case "--launchd" where args.count >= 3:
+            Services.setLine(name, "launchd \(args[2])", "")
+            print("\(name) is checked and restarted as the launchd job \(args[2]).")
+        default:
+            usage()
+        }
+    }
+
+    static func remove(_ name: String) {
+        let label = label(name)
+        runTool("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"])
+        try? FileManager.default.removeItem(at: plistURL(label))
+        Services.removeLine(name)
+        print("\(name) is no longer kept alive, and is off the MAC page.")
+    }
+
+    static func usage() -> Never {
+        print("""
+        usage:
+          crossplay-unlock adopt NAME --run "COMMAND"     keep a command running (it must stay in the foreground)
+          crossplay-unlock adopt NAME --app "App Name"    keep an app open
+          crossplay-unlock adopt NAME --docker CONTAINER  have Docker restart a container
+          crossplay-unlock adopt NAME --launchd LABEL     watch and restart an existing launchd job
+          crossplay-unlock unadopt NAME
+        """)
+        exit(2)
     }
 }
 
@@ -1096,6 +1495,10 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     private func handleCommand(_ frame: Data) {
         let bytes = [UInt8](frame)
+        if bytes.count == 4, bytes[0] == Wire.macLinkVersion, bytes[1] == Wire.commandRestart {
+            Services.restart(row: Int(bytes[2]), check: bytes[3]) { [weak self] in self?.refreshServices() }
+            return
+        }
         guard bytes.count == 2, bytes[0] == Wire.macLinkVersion else {
             log("a command arrived that is not one")
             return
@@ -1412,6 +1815,15 @@ case "forget": commandForget()
 case "run": commandRun()
 case "claude-hook": ClaudeSessions.hook()
 case "claude-setup": ClaudeSessions.setup()
+case "adopt": Adopt.command(Array(CommandLine.arguments.dropFirst(2)))
+case "unadopt":
+    guard CommandLine.arguments.count >= 3 else { Adopt.usage() }
+    Adopt.remove(CommandLine.arguments[2])
+case "doctor":
+    let id = ((try? String(contentsOf: Doctor.sessionFile, encoding: .utf8)) ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    print(id.isEmpty ? "The Service doctor has not been asked anything yet." : "Service doctor chat: claude --resume \(id)")
+    print("log: \(Doctor.logFile.path)")
 case "services":
     for line in Services.lines() {
         let (status, detail) = Services.check(line.check)
@@ -1419,6 +1831,6 @@ case "services":
     }
     print("edit: \(Services.path.path)")
 default:
-    print("usage: crossplay-unlock [pair|password|unblock|status|forget|run|claude-setup|services]")
+    print("usage: crossplay-unlock [pair|password|unblock|status|forget|run|claude-setup|services|adopt|unadopt|doctor]")
     exit(2)
 }

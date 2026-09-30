@@ -310,7 +310,16 @@ because those are the ones that want a person.
   *failed* first, then *in process*, then *completed*. The helper learns it
   from Claude Code's hooks (`crossplay-unlock claude-setup`).
 - **MAC**: the services listed in the helper's `services.txt`, each *running*,
-  *stopped*, *failed* or *unknown*.
+  *stopped*, *failed* or *unknown*. A row that is not running can be tapped:
+  a confirmation screen, then RESTART sends `[1, 3, row, check]` on the command
+  characteristic, where `check` is the low byte of FNV-1a over the row's title
+  as the reader received it (`RemoteCore.h`, `encodeRestart`). The helper
+  refuses a restart whose check does not match its row now, so a list that
+  changed between the draw and the tap restarts nothing rather than the wrong
+  service. The helper tries the service's start command and, if that does not
+  bring it back, asks Claude Code in one standing "Service doctor" chat; the
+  row's detail line follows along (*restarting*, *asking Claude*, then the
+  answer). The reader only asks; everything after is the Mac's.
 
 With no helper connected both pages say so in words, rather than drawing an
 empty list that reads as "nothing running". See

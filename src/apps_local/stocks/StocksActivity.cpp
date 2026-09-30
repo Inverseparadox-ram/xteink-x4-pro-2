@@ -133,6 +133,8 @@ void StocksActivity::startRefresh(const int only) {
     fetched_ = 0;
     done_ = 0;
     total_ = end_ - cursor_;
+    // A whole list goes as one request; a single stock is its own request.
+    batchTried_ = total_ == 1;
   }
   needNetwork();
 }
@@ -146,7 +148,7 @@ void StocksActivity::needNetwork() {
       std::snprintf(busyText_, sizeof(busyText_), "FETCHING %s",
                     store_.holdings()[static_cast<size_t>(cursor_)].symbol.c_str());
     } else {
-      std::snprintf(busyText_, sizeof(busyText_), "FETCHING 1 OF %d", total_);
+      std::snprintf(busyText_, sizeof(busyText_), "FETCHING %d STOCKS", total_);
     }
     requestUpdate();
     return;
@@ -168,14 +170,71 @@ void StocksActivity::onWifiChosen(const bool connected) {
   needNetwork();
 }
 
-// Decision 2: one stock per pass, the busy screen repainted between them.
+// The whole watchlist in one request, and only what that request did not
+// bring back one stock at a time (decision 2's per-stock passes, repainting
+// the busy screen between them).
+bool StocksActivity::refreshBatch() {
+  const std::vector<stocks::Holding>& holdings = store_.holdings();
+  batchTried_ = true;
+  const size_t from = static_cast<size_t>(cursor_);
+  const size_t to = static_cast<size_t>(end_) < holdings.size() ? static_cast<size_t>(end_) : holdings.size();
+  const std::vector<stocks::Holding> chunk(holdings.begin() + static_cast<std::ptrdiff_t>(from),
+                                           holdings.begin() + static_cast<std::ptrdiff_t>(to));
+  std::vector<stocks::Series> results;
+  std::vector<uint8_t> got;
+  std::string message;
+  const stocks::Span span = store_.span();
+  if (!stocks::fetchBatch(chunk, span, results, got, message)) {
+    LOG_ERR(kTag, "batch failed, fetching one at a time: %s", message.c_str());
+    return false;
+  }
+  missing_.clear();
+  for (size_t k = 0; k < chunk.size(); ++k) {
+    const size_t i = from + k;
+    if (!got[k]) {
+      missing_.push_back(static_cast<int>(i));
+      continue;
+    }
+    store_.writeCache(holdings[i], results[k]);
+    RenderLock lock(*this);
+    series_[i] = std::move(results[k]);
+    fresh_[i] = 1;
+    failures_[i].clear();
+    ++fetched_;
+  }
+  RenderLock lock(*this);
+  // Only the stocks the batch did not carry go through the one-at-a-time
+  // path below; the cursor walks that list instead of the whole range.
+  cursor_ = 0;
+  end_ = static_cast<int>(missing_.size());
+  done_ = 0;
+  total_ = end_;
+  if (end_ > 0) {
+    std::snprintf(busyText_, sizeof(busyText_), "FETCHING %s",
+                  holdings[static_cast<size_t>(missing_[0])].symbol.c_str());
+  }
+  requestUpdate();
+  return true;
+}
+
 void StocksActivity::refreshStep() {
   const std::vector<stocks::Holding>& holdings = store_.holdings();
-  if (cursor_ >= end_ || cursor_ >= static_cast<int>(holdings.size())) {
+  if (!batchTried_) {
+    if (refreshBatch()) {
+      useMissing_ = true;
+      return;
+    }
+  }
+  if (cursor_ >= end_) {
     finishRefresh();
     return;
   }
-  const size_t i = static_cast<size_t>(cursor_);
+  const int index = useMissing_ ? missing_[static_cast<size_t>(cursor_)] : cursor_;
+  if (index >= static_cast<int>(holdings.size())) {
+    finishRefresh();
+    return;
+  }
+  const size_t i = static_cast<size_t>(index);
   stocks::Series fresh;
   std::string message;
   const stocks::Span span = store_.span();
@@ -194,18 +253,20 @@ void StocksActivity::refreshStep() {
   RenderLock lock(*this);
   ++cursor_;
   ++done_;
-  if (cursor_ < end_) std::snprintf(busyText_, sizeof(busyText_), "FETCHING %d OF %d", done_ + 1, total_);
+  if (cursor_ < end_) {
+    const int next = useMissing_ ? missing_[static_cast<size_t>(cursor_)] : cursor_;
+    std::snprintf(busyText_, sizeof(busyText_), "FETCHING %s", holdings[static_cast<size_t>(next)].symbol.c_str());
+  }
   requestUpdate();
 }
 
 void StocksActivity::finishRefresh() {
   refreshing_ = false;
+  useMissing_ = false;
   if (fetched_ == 0) {
     // Decision 3: only a refresh where nothing arrived is a notice.
     std::string reason;
-    for (int i = cursor_ - 1; i >= 0 && reason.empty(); --i) {
-      if (static_cast<size_t>(i) < failures_.size()) reason = failures_[static_cast<size_t>(i)];
-    }
+    for (size_t i = failures_.size(); i > 0 && reason.empty(); --i) reason = failures_[i - 1];
     showNotice("NO PRICES", reason.empty() ? std::string("Nothing came back. Try again in a moment.") : reason);
     requestUpdate();
     return;

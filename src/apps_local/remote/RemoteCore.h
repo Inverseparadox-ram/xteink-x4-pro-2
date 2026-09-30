@@ -99,6 +99,17 @@ inline constexpr size_t kCommandLen = 2;
 void encodeCommand(MacCommand command, uint8_t out[kCommandLen]);
 bool decodeCommand(const uint8_t* data, size_t len, MacCommand& out);
 
+// Restart one service on the MAC page: [version, 0x03, row, check], where row
+// is the service's index on the board and check is serviceCheck() of the title
+// the reader shows. The helper runs that row's restart recipe only when both
+// agree, so a list that changed between the tap and the write cannot restart
+// the wrong thing. The row is all the reader chooses: what runs is the Mac's
+// own recipe, never anything sent from here.
+inline constexpr uint8_t kCommandRestartService = 0x03;
+inline constexpr size_t kRestartLen = 4;
+uint8_t serviceCheck(const char* title);
+void encodeRestart(uint8_t row, const char* title, uint8_t out[kRestartLen]);
+
 // What the Mac reports about itself. One bit for now, a byte so it can grow
 // without a new characteristic.
 struct MacState {

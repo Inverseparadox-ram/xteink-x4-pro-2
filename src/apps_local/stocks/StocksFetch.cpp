@@ -6,11 +6,14 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #if defined(FREEINK_NET_WOLFSSL)
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <SecureHttpClient.h>
+#include <esp_heap_caps.h>
 
 #include "StocksRoots.h"
 #else
@@ -50,7 +53,12 @@ std::string baseUrl() {
 bool insufficientHeap(std::string& message) {
   const uint32_t freeHeap = ESP.getFreeHeap();
   const uint32_t maxBlock = ESP.getMaxAllocHeap();
-  if (freeHeap < 70000 || maxBlock < 20000) {
+  // Internal RAM only (getFreeHeap and getMaxAllocHeap both ask for it). TLS
+  // and the parse put their large buffers in PSRAM, so what has to be free
+  // here is the Wi-Fi driver's and the handshake's small working set. 70KB was
+  // Weather's number and it refused on an X4 Pro with Wi-Fi up and the
+  // watchlist loaded, which is the normal state of this app.
+  if (freeHeap < 40000 || maxBlock < 16000) {
     LOG_ERR(kTag, "heap too low: free=%u block=%u", static_cast<unsigned>(freeHeap), static_cast<unsigned>(maxBlock));
     message = "Not enough memory free to fetch prices. Leave the app and open it again.";
     return true;
@@ -170,45 +178,12 @@ bool takeServiceError(JsonVariantConst chart, std::string& message) {
 
 }  // namespace
 
-bool parseChart(const std::string& body, const Span span, Series& out, std::string& message) {
-  // Only what the screens use. The meta block alone carries trading periods
-  // and valid ranges this app never reads, and a filter keeps them out of RAM.
-  JsonDocument filter;
-  JsonObject meta = filter["chart"]["result"][0]["meta"].to<JsonObject>();
-  meta["currency"] = true;
-  meta["regularMarketPrice"] = true;
-  meta["regularMarketTime"] = true;
-  meta["chartPreviousClose"] = true;
-  meta["previousClose"] = true;
-  meta["gmtoffset"] = true;
-  meta["longName"] = true;
-  meta["shortName"] = true;
-  filter["chart"]["result"][0]["timestamp"] = true;
-  JsonObject quote = filter["chart"]["result"][0]["indicators"]["quote"][0].to<JsonObject>();
-  quote["open"] = true;
-  quote["high"] = true;
-  quote["low"] = true;
-  quote["close"] = true;
-  filter["chart"]["error"] = true;
+namespace {
 
-  JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
-  if (err != DeserializationError::Ok) {
-    LOG_ERR(kTag, "chart parse failed: %s", err.c_str());
-    message = "The prices did not arrive in one piece. Try again.";
-    return false;
-  }
-  JsonVariantConst chart = doc["chart"];
-  if (chart.isNull()) {
-    message = "Yahoo answered with something that is not a price chart.";
-    return false;
-  }
-  JsonVariantConst result = chart["result"][0];
-  if (result.isNull()) {
-    if (!takeServiceError(chart, message)) message = "Yahoo had no prices for that symbol.";
-    return false;
-  }
-
+// Reads one chart result -- the object the chart endpoint wraps in
+// chart.result[0] and the spark endpoint in spark.result[i].response[0] --
+// into a Series. The two endpoints share the shape, so they share this.
+bool readResult(JsonVariantConst result, const Span span, Series& out, std::string& message) {
   Series series;
   series.span = span;
   JsonVariantConst m = result["meta"];
@@ -226,6 +201,8 @@ bool parseChart(const std::string& body, const Span span, Series& out, std::stri
   // moves to the day before the window.
   series.previousClose = takeDouble(m["previousClose"]);
   if (series.previousClose <= 0 || span == Span::Days) series.previousClose = takeDouble(m["chartPreviousClose"]);
+  series.dayHigh = takeFloat(m["regularMarketDayHigh"]);
+  series.dayLow = takeFloat(m["regularMarketDayLow"]);
 
   JsonArrayConst times = result["timestamp"];
   JsonVariantConst q = result["indicators"]["quote"][0];
@@ -237,12 +214,17 @@ bool parseChart(const std::string& body, const Span span, Series& out, std::stri
   series.points.reserve(count);
   for (size_t i = 0; i < count; ++i) {
     Point p;
-    p.time = times[i].as<int64_t>();
+    p.time = static_cast<uint32_t>(times[i].as<int64_t>());
     p.close = takeFloat(closes[i]);
-    p.open = takeFloat(opens[i]);
-    p.high = takeFloat(highs[i]);
-    p.low = takeFloat(lows[i]);
     series.points.push_back(p);
+    // The session's open, high and low are kept once rather than per point;
+    // the spark endpoint sends closes only, and the meta's day range stands.
+    const float o = takeFloat(opens[i]);
+    const float h = takeFloat(highs[i]);
+    const float l = takeFloat(lows[i]);
+    if (series.dayOpen <= 0 && o > 0) series.dayOpen = o;
+    if (h > series.dayHigh) series.dayHigh = h;
+    if (l > 0 && (series.dayLow <= 0 || l < series.dayLow)) series.dayLow = l;
   }
   dropGaps(series);
   if (span == Span::Days) keepLast(series, kDaysShown);
@@ -250,10 +232,12 @@ bool parseChart(const std::string& body, const Span span, Series& out, std::stri
   // a last price; one point at it keeps the screens honest and non-empty.
   if (series.points.empty() && series.price > 0) {
     Point p;
-    p.time = series.marketTime;
-    p.open = p.high = p.low = p.close = static_cast<float>(series.price);
+    p.time = static_cast<uint32_t>(series.marketTime);
+    p.close = static_cast<float>(series.price);
     series.points.push_back(p);
   }
+  if (series.price <= 0 && !series.points.empty()) series.price = series.points.back().close;
+  if (series.marketTime <= 0 && !series.points.empty()) series.marketTime = series.points.back().time;
   if (!series.valid()) {
     message = "Yahoo sent a chart with no price in it.";
     return false;
@@ -262,9 +246,122 @@ bool parseChart(const std::string& body, const Span span, Series& out, std::stri
   return true;
 }
 
+void filterResult(JsonObject result) {
+  JsonObject meta = result["meta"].to<JsonObject>();
+  for (const char* key : {"currency", "regularMarketPrice", "regularMarketTime", "chartPreviousClose", "previousClose",
+                          "gmtoffset", "longName", "shortName", "regularMarketDayHigh", "regularMarketDayLow"}) {
+    meta[key] = true;
+  }
+  result["timestamp"] = true;
+  JsonObject quote = result["indicators"]["quote"][0].to<JsonObject>();
+  for (const char* key : {"open", "high", "low", "close"}) quote[key] = true;
+}
+
+#if defined(BOARD_HAS_PSRAM) && defined(FREEINK_NET_WOLFSSL)
+// The parsed document lives in PSRAM. ArduinoJson's pools are allocated in
+// blocks small enough that the heap would otherwise put them in internal RAM,
+// which is the memory a TLS connection and the Wi-Fi driver are short of --
+// and running it low is what made refreshes refuse to start.
+struct PsramAllocator : ArduinoJson::Allocator {
+  void* allocate(size_t size) override { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+  void deallocate(void* pointer) override { heap_caps_free(pointer); }
+  void* reallocate(void* pointer, size_t size) override {
+    return heap_caps_realloc(pointer, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+};
+ArduinoJson::Allocator* jsonAllocator() {
+  static PsramAllocator allocator;
+  return &allocator;
+}
+#else
+ArduinoJson::Allocator* jsonAllocator() { return ArduinoJson::detail::DefaultAllocator::instance(); }
+#endif
+
+// Percent-encoding for a symbol in a query: M&M is a real NSE symbol.
+std::string encodeSymbol(const std::string& symbol) {
+  static constexpr char kHex[] = "0123456789ABCDEF";
+  std::string out;
+  out.reserve(symbol.size() * 3);
+  for (const char c : symbol) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    if ((u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z') || (u >= '0' && u <= '9') || u == '-' || u == '.' ||
+        u == '_') {
+      out += static_cast<char>(u);
+    } else {
+      out += '%';
+      out += kHex[u >> 4];
+      out += kHex[u & 0x0F];
+    }
+  }
+  return out;
+}
+
+const char* rangeQuery(const Span span) {
+  return span == Span::Today ? "range=1d&interval=5m" : "range=1mo&interval=1d";
+}
+
+}  // namespace
+
+bool parseChart(const std::string& body, const Span span, Series& out, std::string& message) {
+  // Only what the screens use. The meta block alone carries trading periods
+  // and valid ranges this app never reads, and a filter keeps them out of RAM.
+  JsonDocument filter;
+  filterResult(filter["chart"]["result"][0].to<JsonObject>());
+  filter["chart"]["error"] = true;
+
+  JsonDocument doc(jsonAllocator());
+  const DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
+  if (err != DeserializationError::Ok) {
+    LOG_ERR(kTag, "chart parse failed: %s", err.c_str());
+    message = "The prices did not arrive in one piece. Try again.";
+    return false;
+  }
+  JsonVariantConst chart = doc["chart"];
+  if (chart.isNull()) {
+    message = "Yahoo answered with something that is not a price chart.";
+    return false;
+  }
+  JsonVariantConst result = chart["result"][0];
+  if (result.isNull()) {
+    if (!takeServiceError(chart, message)) message = "Yahoo had no prices for that symbol.";
+    return false;
+  }
+  return readResult(result, span, out, message);
+}
+
+size_t parseSpark(const std::string& body, const Span span, const std::vector<std::string>& symbols,
+                  std::vector<Series>& out, std::vector<uint8_t>& got) {
+  got.assign(symbols.size(), 0);
+  out.resize(symbols.size());
+  JsonDocument filter;
+  JsonObject entry = filter["spark"]["result"][0].to<JsonObject>();
+  entry["symbol"] = true;
+  filterResult(entry["response"][0].to<JsonObject>());
+
+  JsonDocument doc(jsonAllocator());
+  if (deserializeJson(doc, body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) return 0;
+  JsonArrayConst results = doc["spark"]["result"];
+  if (results.isNull()) return 0;
+  size_t found = 0;
+  for (JsonVariantConst item : results) {
+    const char* symbol = item["symbol"].is<const char*>() ? item["symbol"].as<const char*>() : nullptr;
+    if (symbol == nullptr) continue;
+    for (size_t i = 0; i < symbols.size(); ++i) {
+      if (got[i] || symbols[i] != symbol) continue;
+      std::string ignored;
+      if (readResult(item["response"][0], span, out[i], ignored)) {
+        got[i] = 1;
+        ++found;
+      }
+      break;
+    }
+  }
+  return found;
+}
+
 bool fetchSeries(const Holding& holding, const Span span, Series& out, std::string& message) {
-  const std::string url = baseUrl() + "/v8/finance/chart/" + yahooSymbol(holding) +
-                          (span == Span::Today ? "?range=1d&interval=5m" : "?range=1mo&interval=1d");
+  const std::string url =
+      baseUrl() + "/v8/finance/chart/" + encodeSymbol(yahooSymbol(holding)) + "?" + rangeQuery(span);
   std::string body;
   const int status = httpGet(url, body, message);
   if (status <= 0) return false;
@@ -295,6 +392,40 @@ bool fetchSeries(const Holding& holding, const Span span, Series& out, std::stri
   if (!parseChart(body, span, out, message)) return false;
   LOG_INF(kTag, "%s %s: %d points at %.2f", yahooSymbol(holding).c_str(), spanName(span),
           static_cast<int>(out.points.size()), out.price);
+  return true;
+}
+
+bool fetchBatch(const std::vector<Holding>& holdings, const Span span, std::vector<Series>& out,
+                std::vector<uint8_t>& got, std::string& message) {
+  got.assign(holdings.size(), 0);
+  out.assign(holdings.size(), Series{});
+  if (holdings.empty()) return true;
+  std::vector<std::string> symbols;
+  symbols.reserve(holdings.size());
+  std::string list;
+  for (const Holding& h : holdings) {
+    symbols.push_back(yahooSymbol(h));
+    if (!list.empty()) list += ',';
+    list += encodeSymbol(symbols.back());
+  }
+  const std::string url = baseUrl() + "/v8/finance/spark?symbols=" + list + "&" + rangeQuery(span);
+  std::string body;
+  const int status = httpGet(url, body, message);
+  if (status <= 0) return false;
+  if (status >= 400 || body.size() > kMaxBody) {
+    char text[80];
+    std::snprintf(text, sizeof(text), "Yahoo answered %d to the watchlist request.", status);
+    message = text;
+    LOG_ERR(kTag, "spark: status %d, %u bytes", status, static_cast<unsigned>(body.size()));
+    return false;
+  }
+  const size_t found = parseSpark(body, span, symbols, out, got);
+  LOG_INF(kTag, "spark %s: %u of %u symbols in one request", spanName(span), static_cast<unsigned>(found),
+          static_cast<unsigned>(symbols.size()));
+  if (found == 0) {
+    message = "Yahoo's watchlist answer was not in a shape this app knows.";
+    return false;
+  }
   return true;
 }
 

@@ -89,6 +89,32 @@ NSE symbols gain `.NS` and BSE `.BO`; `BRK.B` is asked for as `BRK-B`. The
 request carries a browser's User-Agent, because Yahoo answers anything else
 with 429.
 
+A refresh asks for the **whole list in one request**, through the spark
+endpoint, which answers with the same chart results side by side:
+
+```
+https://query1.finance.yahoo.com/v8/finance/spark?symbols=AAPL,RELIANCE.NS&range=1d&interval=5m
+```
+
+A TLS handshake is most of what one request costs on this device, so one
+request instead of one per stock is most of a refresh's time saved. Only the
+symbols spark did not return are then asked for one at a time over the chart
+endpoint, and if spark fails outright the whole list is. Spark sends closes
+only, so the day's high and low come from each result's meta
+(`regularMarketDayHigh`/`Low`).
+
+### Memory
+
+The response and the parsed document live in PSRAM: the body grows past the
+4KB below which the heap keeps allocations internal, and the JSON document has
+its own allocator that asks for PSRAM outright, because ArduinoJson's small
+pool blocks would otherwise land in internal RAM, which is what TLS and the
+Wi-Fi driver need. A filter keeps everything the app does not draw (volumes,
+trading periods, the list of valid ranges) out of the document. A point is a
+time and a close, 8 bytes. A refresh refuses to start below 40KB of free
+internal heap or a 16KB largest block, and says so, rather than rebooting
+halfway through a handshake.
+
 It is **unofficial**. The day it changes shape, the app says so in words
 ("Yahoo sent a chart with no price in it") rather than drawing zeros, and a
 symbol Yahoo does not know comes back as Yahoo's own "No data found".

@@ -46,6 +46,9 @@ enum : fui::ActionId {
   ActionForgetCancel = 393,
   ActionVolumeDown = 394,
   ActionNextPage = 395,
+  ActionRestartRow = 396,
+  ActionRestartConfirm = 397,
+  ActionRestartCancel = 399,
   ActionPairDone = 398,
 };
 
@@ -133,9 +136,25 @@ struct StatusPageModel {
   bool helperConnected = false;
   const char* emptyLine = "";  // what an empty board means, in words
   bool offerForget = false;    // the MAC page carries the unpair control
+  // Rows that are not running can be tapped (the MAC page): ActionRestartRow
+  // with the row's index as the value.
+  bool restartable = false;
 };
 
 void buildStatusPage(toybox::Screen& screen, const StatusPageModel& model);
+
+// Whether a MAC-page row offers a restart: anything not running and not
+// already being seen to.
+bool restartOffered(remote::StatusCode code);
+
+// "Restart Wake TV?" before anything is sent. RESTART takes the primary band;
+// CANCEL sits apart from it.
+struct RestartModel {
+  const char* title = "";
+  const char* detail = "";  // what the row says now: "stopped . process"
+};
+
+void buildRestartConfirm(toybox::Screen& screen, const RestartModel& model);
 
 // The confirm in front of clearing the bonds. Destructive in the sense that
 // matters here: the Mac has to be told to forget the device too, and until it

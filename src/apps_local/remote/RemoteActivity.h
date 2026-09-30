@@ -36,7 +36,7 @@ class RemoteActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  enum class Phase : uint8_t { Remote, Forget, Pair };
+  enum class Phase : uint8_t { Remote, Forget, Pair, Restart };
 
   void press(remote::Key key);
   void seek(bool forward);
@@ -106,6 +106,11 @@ class RemoteActivity final : public Activity {
   // Which page of the REMOTE / CLAUDE / MAC trio is on screen. Not persisted:
   // the remote opens on its controls, which is what it is opened for.
   int page_ = 0;
+  // The MAC-page row a restart was asked for, and its title as shown, kept
+  // from the tap to the confirm so the command names what the person saw.
+  int restartRow_ = -1;
+  char restartTitle_[remote::kStatusTitleMax + 1] = "";
+  char restartDetail_[remote::kStatusDetailMax + 24] = "";
 
   // Whether the helper was subscribed at the last loop, so its arrival --
   // the app opening, the Mac reconnecting -- can trigger a status check.

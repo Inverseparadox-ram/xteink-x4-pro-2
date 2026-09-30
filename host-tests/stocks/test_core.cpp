@@ -32,11 +32,9 @@ using namespace stocks;
 static bool near(const double a, const double b) { return std::fabs(a - b) < 1e-6; }
 
 static Point point(const int64_t t, const float close) {
+  static_assert(sizeof(Point) == 8, "a point is a time and a close, nothing more");
   Point p;
   p.time = t;
-  p.open = close;
-  p.high = close;
-  p.low = close;
   p.close = close;
   return p;
 }
@@ -144,24 +142,28 @@ static void testSeries() {
 
   Series gaps;
   gaps.points = {point(1, 10), point(2, 0), point(3, NAN), point(4, 12)};
-  gaps.points[3].high = 0;
   dropGaps(gaps);
   CHECK(gaps.points.size() == 2, "two survive");
-  CHECK(gaps.points.size() == 2 && near(gaps.points[1].high, 12), "missing high filled from close");
+  CHECK(gaps.points.size() == 2 && near(gaps.points[1].close, 12), "gaps dropped, order kept");
 
   Series none;
   none.price = 5;
   none.points = {point(1, 4)};
   const Move fromOpen = moveOf(none);
-  CHECK(near(fromOpen.from, 4) && near(fromOpen.delta, 1), "no previous close falls back to first open");
+  CHECK(near(fromOpen.from, 4) && near(fromOpen.delta, 1), "no previous close falls back to first close");
+  none.dayOpen = 3.5f;
+  CHECK(near(moveOf(none).from, 3.5), "then to the day's open when the service gave one");
 
   Series day;
   day.points = {point(1, 10), point(2, 12), point(3, 9)};
-  day.points[0].open = 9.5f;
-  day.points[1].high = 13;
-  day.points[2].low = 8.5f;
+  day.dayOpen = 9.5f;
+  day.dayHigh = 13;
+  day.dayLow = 8.5f;
   const Extremes e = extremesOf(day);
   CHECK(near(e.open, 9.5) && near(e.high, 13) && near(e.low, 8.5), "extremes");
+  day.dayOpen = day.dayHigh = day.dayLow = 0;
+  const Extremes closes = extremesOf(day);
+  CHECK(near(closes.open, 10) && near(closes.high, 12) && near(closes.low, 9), "extremes from closes alone");
   CHECK(sessionSeconds(Exchange::Nasdaq) == 23400 && sessionSeconds(Exchange::Nse) == 22500, "sessions");
 
   Series zero;
@@ -250,17 +252,14 @@ static void testRange() {
   s.price = 105;
   s.previousClose = 95;
   s.points = {point(1, 100), point(2, 110)};
-  s.points[1].high = 120;
-  const Range plain = rangeOf(s, false);
+  const Range plain = rangeOf(s);
   CHECK(plain.low < 95 && plain.high > 110 && plain.high < 120, "closes and previous close, padded");
-  const Range withHighLow = rangeOf(s, true);
-  CHECK(withHighLow.high > 120, "high included for candles");
 
   Series flat;
   flat.price = 50;
   flat.previousClose = 50;
   flat.points = {point(1, 50), point(2, 50)};
-  const Range r = rangeOf(flat, false);
+  const Range r = rangeOf(flat);
   CHECK(r.high > r.low, "flat series widened");
   const int16_t mid = yFor(50, r, 100, 101);
   CHECK(mid >= 148 && mid <= 152, "flat draws across the middle: %d", mid);
@@ -271,7 +270,7 @@ static void testRange() {
   CHECK(yFor(-5, r, 10, 100) == 109, "clamped low");
 
   Series empty;
-  const Range e = rangeOf(empty, false);
+  const Range e = rangeOf(empty);
   CHECK(e.high > e.low, "empty range is usable");
 }
 
@@ -285,14 +284,18 @@ static void testCache() {
   s.marketTime = 1790654400;
   s.gmtOffset = 19800;
   s.points = {point(1790654400, 3001.5f), point(1790654700, 3012.35f)};
-  s.points[0].high = 3004.25f;
+  s.dayOpen = 2999.5f;
+  s.dayHigh = 3014.0f;
+  s.dayLow = 2990.25f;
   const std::string text = serializeSeries(s);
   Series back;
   CHECK(parseSeries(text, back), "round trip parses");
   CHECK(back.span == Span::Today && near(back.price, 3012.35) && near(back.previousClose, 2999.1), "numbers");
   CHECK(back.currency == "INR" && back.name == "Reliance Industries Limited", "strings: [%s]", back.name.c_str());
   CHECK(back.marketTime == 1790654400 && back.gmtOffset == 19800, "time");
-  CHECK(back.points.size() == 2 && back.points[0].high == 3004.25f && back.points[1].close == 3012.35f, "points");
+  CHECK(back.points.size() == 2 && back.points[1].close == 3012.35f && back.points[0].time == 1790654400u, "points");
+  CHECK(back.dayOpen == 2999.5f && back.dayHigh == 3014.0f && back.dayLow == 2990.25f, "day range");
+  CHECK(!parseSeries("crossplay-stocks-series 1\nspan today\n", back), "old cache version refused");
 
   Series days = s;
   days.span = Span::Days;
@@ -303,7 +306,7 @@ static void testCache() {
 
   Series junk;
   CHECK(!parseSeries("", junk), "empty");
-  CHECK(!parseSeries("crossplay-stocks-series 2\n", junk), "future version refused");
+  CHECK(!parseSeries("crossplay-stocks-series 3\n", junk), "future version refused");
   std::string truncated = text.substr(0, text.size() - 10);
   CHECK(!parseSeries(truncated, junk), "truncated refused");
   std::string huge = text;

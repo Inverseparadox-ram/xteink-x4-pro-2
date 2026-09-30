@@ -279,6 +279,22 @@ static void testTheStatusBoardsAssembleWholeOrNotAtAll() {
   CHECK(!boards.board(StatusBoardId::Claude).known && !boards.board(StatusBoardId::Services).known, "forgotten");
 }
 
+static void testTheRestartFrameIsPinned() {
+  // FNV-1a of "Wake TV", low byte, computed independently: the Swift helper
+  // must agree or it refuses the restart.
+  uint32_t h = 2166136261u;
+  for (const char c : std::string("Wake TV")) {
+    h ^= static_cast<uint8_t>(c);
+    h *= 16777619u;
+  }
+  uint8_t frame[remote::kRestartLen];
+  remote::encodeRestart(3, "Wake TV", frame);
+  CHECK(frame[0] == 1 && frame[1] == 0x03 && frame[2] == 3 && frame[3] == static_cast<uint8_t>(h & 0xFF),
+        "restart bytes pinned");
+  CHECK(remote::serviceCheck("Wake TV") != remote::serviceCheck("Wake Tv"), "the check sees the title");
+  CHECK(remote::serviceCheck("") == static_cast<uint8_t>(2166136261u & 0xFF), "empty title");
+}
+
 int main() {
   testOnlyTheProfileThatKnowsTheNumbersPrintsThem();
   testBrowserSeekTypesTheYouTubeKeys();
@@ -290,6 +306,7 @@ int main() {
   testALongTitleIsCutOnACharacterNeverThroughOne();
   testControlCharactersNeverReachTheScreen();
   testTheStatusBoardsAssembleWholeOrNotAtAll();
+  testTheRestartFrameIsPinned();
   std::printf("%s  remote core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;
 }

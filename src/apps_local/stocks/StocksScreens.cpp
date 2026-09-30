@@ -155,12 +155,12 @@ struct DataSpan {
 // The extremes of the closes alone: what the right-hand labels name. The
 // chart's own range is padded (rangeOf) and a padded number is not a price
 // anything traded at.
-DataSpan closesOf(const stocks::Series& series, const bool withHighLow) {
+DataSpan closesOf(const stocks::Series& series) {
   DataSpan d;
   bool any = false;
   for (const stocks::Point& p : series.points) {
-    const double lo = withHighLow ? p.low : p.close;
-    const double hi = withHighLow ? p.high : p.close;
+    const double lo = p.close;
+    const double hi = p.close;
     if (!any) {
       d.low = lo;
       d.high = hi;
@@ -176,13 +176,13 @@ DataSpan closesOf(const stocks::Series& series, const bool withHighLow) {
 // previous close the chart is read against, each at its own height and
 // dropped when it would sit on top of another.
 void axisLabels(fui::DrawTarget& target, const fui::Rect& plot, const stocks::Series& series,
-                const stocks::Range& range, const bool withHighLow) {
+                const stocks::Range& range) {
   const int16_t smallH = target.lineHeight(toybox::kTileFont);
   const fui::TextStyle style = plain(toybox::kTileFont, fui::TextAlign::Right, fui::Color::Black);
   const fui::TextStyle prevStyle = plain(toybox::kTileFont, fui::TextAlign::Right, fui::Color::DarkGray);
   const int16_t x = static_cast<int16_t>(plot.right() + 4);
   const int16_t w = static_cast<int16_t>(kAxisWidth - 4);
-  const DataSpan data = closesOf(series, withHighLow);
+  const DataSpan data = closesOf(series);
 
   const int16_t highY = stocks::yFor(data.high, range, plot.y, plot.height);
   const int16_t lowY = stocks::yFor(data.low, range, plot.y, plot.height);
@@ -218,7 +218,7 @@ void chartToday(fui::DrawTarget& target, const fui::Rect& chart, const stocks::S
   const int16_t smallH = target.lineHeight(toybox::kTileFont);
   const fui::Rect plot = fui::makeRect(chart.x, chart.y, static_cast<int16_t>(chart.width - kAxisWidth),
                                        static_cast<int16_t>(chart.height - smallH - 4));
-  const stocks::Range range = stocks::rangeOf(series, false);
+  const stocks::Range range = stocks::rangeOf(series);
   const fui::Paint ink = fui::Paint::solid(fui::Color::Black);
   baseline(target, plot);
   previousCloseLine(target, plot, series, range);
@@ -238,7 +238,7 @@ void chartToday(fui::DrawTarget& target, const fui::Rect& chart, const stocks::S
     last = here;
   }
   target.fill(fui::makeRect(static_cast<int16_t>(last.x - 4), static_cast<int16_t>(last.y - 4), 9, 9), ink, 4);
-  axisLabels(target, plot, series, range, false);
+  axisLabels(target, plot, series, range);
 
   const std::string open = stocks::formatExchangeTime(start, series.gmtOffset);
   const std::string close = stocks::formatExchangeTime(start + session, series.gmtOffset);
@@ -280,7 +280,7 @@ fui::Rect dailyPlot(const fui::DrawTarget& target, const fui::Rect& chart) {
 
 void chartDaysLine(fui::DrawTarget& target, const fui::Rect& chart, const stocks::Series& series) {
   const fui::Rect plot = dailyPlot(target, chart);
-  const stocks::Range range = stocks::rangeOf(series, false);
+  const stocks::Range range = stocks::rangeOf(series);
   const fui::Paint ink = fui::Paint::solid(fui::Color::Black);
   baseline(target, plot);
   previousCloseLine(target, plot, series, range);
@@ -297,7 +297,7 @@ void chartDaysLine(fui::DrawTarget& target, const fui::Rect& chart, const stocks
     const int16_t y = stocks::yFor(series.points[static_cast<size_t>(i)].close, range, plot.y, plot.height);
     target.fill(fui::makeRect(static_cast<int16_t>(x - 4), static_cast<int16_t>(y - 4), 9, 9), ink, 4);
   }
-  axisLabels(target, plot, series, range, false);
+  axisLabels(target, plot, series, range);
   dayNumbers(target, plot, series);
 }
 
@@ -358,7 +358,7 @@ int16_t statsGrid(fui::DrawTarget& target, const fui::Rect& area, const Stat* st
 void sparkline(fui::DrawTarget& target, const fui::Rect& box, const stocks::Series& series) {
   const size_t n = series.points.size();
   if (n == 0 || box.width < 8) return;
-  const stocks::Range range = stocks::rangeOf(series, false);
+  const stocks::Range range = stocks::rangeOf(series);
   const fui::Paint ink = fui::Paint::solid(fui::Color::Black);
   if (series.previousClose > 0)
     dashed(target, box.x, box.right(), stocks::yFor(series.previousClose, range, box.y, box.height));

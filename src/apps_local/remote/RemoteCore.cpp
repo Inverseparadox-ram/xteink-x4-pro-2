@@ -170,6 +170,24 @@ void encodeCommand(const MacCommand command, uint8_t out[kCommandLen]) {
   out[1] = static_cast<uint8_t>(command);
 }
 
+uint8_t serviceCheck(const char* title) {
+  // FNV-1a over the title's bytes, low byte. The Swift helper computes the
+  // same over the first kStatusTitleMax bytes of the name it sent.
+  uint32_t hash = 2166136261u;
+  for (const char* p = title; p != nullptr && *p != '\0'; ++p) {
+    hash ^= static_cast<uint8_t>(*p);
+    hash *= 16777619u;
+  }
+  return static_cast<uint8_t>(hash & 0xFF);
+}
+
+void encodeRestart(const uint8_t row, const char* title, uint8_t out[kRestartLen]) {
+  out[0] = kMacLinkVersion;
+  out[1] = kCommandRestartService;
+  out[2] = row;
+  out[3] = serviceCheck(title);
+}
+
 bool decodeCommand(const uint8_t* data, const size_t len, MacCommand& out) {
   if (data == nullptr || len != kCommandLen || data[0] != kMacLinkVersion) return false;
   if (data[1] != static_cast<uint8_t>(MacCommand::MuteMicrophones) &&

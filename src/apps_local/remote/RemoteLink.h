@@ -98,6 +98,10 @@ bool takeNowPlaying(NowPlaying& out);
 // which the button then reports rather than pretending it was obeyed.
 bool sendCommand(MacCommand command);
 
+// Asks the Mac to restart the service on MAC-page row `row`, titled `title`.
+// False when the helper is not listening.
+bool sendRestart(uint8_t row, const char* title);
+
 // What the Mac last reported about itself. True only on a CHANGE, for the same
 // reason as takeNowPlaying(); reset to "not known" when the helper goes away,
 // so the microphone button never claims a state it can no longer be told.

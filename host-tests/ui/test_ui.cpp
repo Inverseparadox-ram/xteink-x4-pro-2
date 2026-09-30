@@ -10412,6 +10412,47 @@ void testTheRemoteStatusPages() {
   CHECK(mac.has(remoteui::ActionNextPage));
   CHECK(drewText(mac, "Waiting for the Mac..."));
 
+  // On MAC, a row that is not running is a restart; a running one is not.
+  remote::StatusAssembler services;
+  const remote::StatusCode serviceCodes[2] = {remote::StatusCode::Running, remote::StatusCode::Failed};
+  const char* serviceNames[2] = {"Immich", "Wake TV"};
+  for (uint8_t i = 0; i < 2; ++i) {
+    remote::StatusRow row;
+    row.status = serviceCodes[i];
+    std::snprintf(row.title, sizeof(row.title), "%s", serviceNames[i]);
+    uint8_t frame[remote::kStatusFrameMax];
+    services.feed(frame, remote::encodeStatusRow(remote::StatusBoardId::Services, 2, i, row, frame, sizeof(frame)));
+  }
+  Rendered tappable;
+  model.board = &services.board(remote::StatusBoardId::Services);
+  model.restartable = true;
+  build(tappable, model);
+  int restartRows = 0;
+  for (size_t i = 0; i < tappable.interactions.count(); ++i) {
+    const fui::Interaction& hit = tappable.interactions.data()[i];
+    if (hit.action != remoteui::ActionRestartRow) continue;
+    ++restartRows;
+    CHECK(hit.value == 1);
+    const fui::ActionEvent event = tappable.tap(hit.rect.x + hit.rect.width / 2, hit.rect.y + hit.rect.height / 2);
+    CHECK(event.action == remoteui::ActionRestartRow && event.value == 1);
+  }
+  CHECK(restartRows == 1);
+
+  Rendered confirm;
+  {
+    const fui::DeviceContext ctx = device();
+    const fui::InputSnapshot noInput{};
+    toybox::Frame frame(confirm.target, ctx, noInput, confirm.interactions);
+    toybox::Screen screen(frame, toybox::themeTokens());
+    remoteui::RestartModel restart;
+    restart.title = "Wake TV";
+    restart.detail = "failed  .  exit 1";
+    remoteui::buildRestartConfirm(screen, restart);
+  }
+  CHECK(confirm.has(remoteui::ActionRestartConfirm));
+  CHECK(confirm.has(remoteui::ActionRestartCancel));
+  CHECK(drewText(confirm, "Wake TV"));
+
   Rendered away;
   model.helperConnected = false;
   build(away, model);
@@ -15582,7 +15623,7 @@ stocks::Series stocksSeries(const stocks::Span span, const int points) {
   for (int i = 0; i < points; ++i) {
     stocks::Point p;
     p.time = 1790688600 + i * (span == stocks::Span::Today ? 300 : 86400);
-    p.close = p.open = p.high = p.low = static_cast<float>(100 + i);
+    p.close = static_cast<float>(100 + i);
     s.points.push_back(p);
   }
   return s;

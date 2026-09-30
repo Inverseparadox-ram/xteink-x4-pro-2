@@ -89,11 +89,12 @@ inline constexpr size_t kDaysShown = 10;
 
 const char* spanName(Span span);  // "TODAY" / "10 DAYS"
 
+// Eight bytes: a time and a close. A watchlist refreshed on the device holds
+// a few hundred of these in the chip's internal RAM, the scarce kind, and the
+// open, high and low of every five-minute step were 16 bytes a point that only
+// ever fed three numbers on one screen -- kept once per series instead.
 struct Point {
-  int64_t time = 0;  // UTC seconds
-  float open = 0;
-  float high = 0;
-  float low = 0;
+  uint32_t time = 0;  // UTC seconds
   float close = 0;
 };
 
@@ -105,6 +106,11 @@ struct Series {
   std::string name;          // "Apple Inc.", empty when the service gave none
   int64_t marketTime = 0;    // when `price` was true, UTC seconds
   int32_t gmtOffset = 0;     // the exchange's offset from UTC, seconds
+  // The session's (or the window's) first open, highest high and lowest low,
+  // 0 when the service did not say. Only the TODAY screen prints them.
+  float dayOpen = 0;
+  float dayHigh = 0;
+  float dayLow = 0;
   std::vector<Point> points;
 
   bool valid() const { return price > 0 && !points.empty(); }
@@ -184,12 +190,11 @@ struct Range {
   double high = 0;
 };
 
-// The span a chart has to cover: every close (and every high and low, for
-// candles) and the previous close, which is the line the chart is read
+// The span a chart has to cover: every close and the previous close, which is the line the chart is read
 // against. Padded so the extremes do not touch the frame, and widened when the
 // series is flat so a still price draws as a line across the middle rather
 // than a division by zero.
-Range rangeOf(const Series& series, bool withHighLow);
+Range rangeOf(const Series& series);
 
 // Where `value` falls in a box `height` pixels tall starting at `top`: high
 // values near the top, as a chart is read.

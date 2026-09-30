@@ -157,6 +157,9 @@ unlock button that verifies fine and never works.
 | `crossplay-unlock run` | serve challenges; what launchd runs |
 | `crossplay-unlock claude-setup` | add the hook that feeds the reader's CLAUDE page to `~/.claude/settings.json` (once) |
 | `crossplay-unlock services` | print what each line of `services.txt` finds right now |
+| `crossplay-unlock adopt NAME --run "CMD"` | keep a command running under launchd (also `--app`, `--docker`, `--launchd`) |
+| `crossplay-unlock unadopt NAME` | stop keeping it running and take it off the MAC page |
+| `crossplay-unlock doctor` | print the Service doctor's session id, to open that chat yourself |
 | `crossplay-unlock claude-hook` | what Claude Code runs on each event; not for typing |
 
 ## The CLAUDE and MAC pages
@@ -184,12 +187,77 @@ already open before the setup appear from their next prompt.
 
 **MAC** lists your own background services from `services.txt` beside the
 ledger (`~/Library/Application Support/CrossPlayUnlock/`), one per line as
-`NAME | CHECK`, checked every thirty seconds. A check is `launchd <label>`,
-`process <text>` (a command line containing it), `docker <container>`,
-`http <url>` or `self`. The file is written on first run with guesses for
-Ambient tasks, Immich, Voice typing, Wake TV and Remote unlock: **edit the
-checks to match how each actually runs here**, then run
-`crossplay-unlock services` to see what each finds.
+`NAME | CHECK | START`, checked every thirty seconds. A check is
+`launchd <label>`, `process <text>` (a command line containing it),
+`docker <container>`, `http <url>` or `self`. START is optional: the shell
+command that starts the service again (see below). The file is written on
+first run with guesses for Ambient tasks, Immich, Voice typing, Wake TV and
+Remote unlock: **edit the checks to match how each actually runs here**, then
+run `crossplay-unlock services` to see what each finds.
+
+## Keeping services running
+
+Three layers, cheapest first.
+
+**1. macOS keeps it alive (`adopt`).** Most of what goes down on a Mac is a
+process that exited, and launchd will restart one by itself if it is told to.
+`adopt` writes a launchd agent with `KeepAlive` for it, loads it, and points
+the service's line in `services.txt` at it:
+
+    crossplay-unlock adopt "Voice typing" --run "/usr/local/bin/voice-typer --serve"
+    crossplay-unlock adopt "Wake TV"      --app "Wake TV"
+    crossplay-unlock adopt "Immich"       --docker immich_server
+    crossplay-unlock adopt "Ambient"      --launchd com.me.ambient
+
+- `--run` runs the command through a login shell, so it sees Terminal's PATH.
+  **It must stay in the foreground**: a command that forks and exits looks like
+  a crash to launchd and is started again every 20 seconds. Stop whatever
+  started it before (a login item, a `&` in a script) first, or there will be
+  two.
+- `--app` keeps an app open (`open -W -a`), so quitting it reopens it.
+- `--docker` sets the container's restart policy to `unless-stopped`, so Docker
+  restarts it when it dies and when Docker starts. No launchd agent; Docker
+  Desktop itself has to be set to start at login.
+- `--launchd` adopts a job that already exists, for the restart button below.
+
+Agents are `~/Library/LaunchAgents/com.crossplay.svc.<name>.plist`, and their
+output goes to `logs/<name>.log` beside the ledger. `unadopt NAME` removes the
+agent and the line.
+
+**2. RESTART on the reader.** A service on the MAC page that is *stopped*,
+*failed* or *unknown* can be tapped; the reader asks for a confirmation, then
+sends the helper the row and a check byte of its name (so a list that changed
+in the meantime cannot restart the wrong thing). The helper runs the line's
+START, or for `launchd` and `docker` lines one it knows
+(`launchctl kickstart -k`, falling back to `launchctl bootstrap`;
+`docker start`). The row reads *restarting* meanwhile, and *restarted* if it is
+back eight seconds later.
+
+**3. The Service doctor.** If the restart did not bring it back, the helper
+asks Claude Code, headless (`claude -p`), with what the check says, the start
+command and what it printed. The row reads *asking Claude*, and then Claude's
+last line (at most 30 characters) for half an hour.
+
+Every one of these runs **resumes the same session**, so they are all one
+chat -- the Service doctor -- which remembers what it tried last time. Its id
+is in `doctor-session.txt`; `crossplay-unlock doctor` prints it, and
+
+    claude --resume <id>
+
+opens it in a terminal to read or carry on. The full answers are also in
+`logs/doctor.log`. If you ran `claude-setup` it shows on the reader's CLAUDE
+page too, like any other session. If the saved session cannot be resumed
+(cleared, or copied from another Mac), a new one is started and saved.
+
+Nobody is at the Mac to approve anything, so the doctor runs with a fixed list
+of tools it may use without asking: reading files, and `launchctl`, `docker`,
+`open`, `ps`, `pgrep`, `pkill`, `lsof`, `tail`, `cat`, `ls`, `log show`,
+`brew services`, `curl` and this helper. Put rules one per line in
+`doctor-tools.txt` beside the ledger (the same syntax as `--allowedTools`, e.g.
+`Bash(npm run:*)`) and that list replaces the default one. It runs in the
+`doctor/` folder beside the ledger, finds `claude` in `~/.local/bin`,
+`~/.claude/local`, Homebrew or your login shell's PATH, and is stopped after
+ten minutes.
 
 ## Keyboard layout
 

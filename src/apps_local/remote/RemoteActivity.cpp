@@ -632,6 +632,35 @@ void RemoteActivity::loop() {
     case remoteui::ActionProfile:
       cycleProfile();
       break;
+    case remoteui::ActionRestartRow: {
+      const remote::StatusBoard& board = remote::helper::statusBoards().board(remote::StatusBoardId::Services);
+      if (event.value < 0 || event.value >= board.count) break;
+      const remote::StatusRow& row = board.rows[event.value];
+      RenderLock lock(*this);
+      restartRow_ = event.value;
+      std::snprintf(restartTitle_, sizeof(restartTitle_), "%s", row.title);
+      std::snprintf(restartDetail_, sizeof(restartDetail_), "%s  .  %s", remote::statusWord(row.status), row.detail);
+      phase_ = Phase::Restart;
+      requestUpdate();
+      break;
+    }
+    case remoteui::ActionRestartConfirm: {
+      if (restartRow_ >= 0 && !remote::helper::sendRestart(static_cast<uint8_t>(restartRow_), restartTitle_)) {
+        LOG_ERR("REMOTE", "restart: the helper is not listening");
+      }
+      RenderLock lock(*this);
+      restartRow_ = -1;
+      phase_ = Phase::Remote;
+      requestUpdate();
+      break;
+    }
+    case remoteui::ActionRestartCancel: {
+      RenderLock lock(*this);
+      restartRow_ = -1;
+      phase_ = Phase::Remote;
+      requestUpdate();
+      break;
+    }
     case remoteui::ActionNextPage: {
       RenderLock lock(*this);
       page_ = (page_ + 1) % remoteui::kPageCount;
@@ -696,6 +725,12 @@ void RemoteActivity::render(RenderLock&&) {
     model.detail = "Type this into the unlock helper on the Mac. It is shown once. Then press either side key.";
     remoteui::buildPair(screen, model);
     what = "Remote pair";
+  } else if (phase_ == Phase::Restart) {
+    remoteui::RestartModel model;
+    model.title = restartTitle_;
+    model.detail = restartDetail_;
+    remoteui::buildRestartConfirm(screen, model);
+    what = "Remote restart";
   } else if (page_ != 0) {
     const bool claude = page_ == 1;
     remoteui::StatusPageModel model;
@@ -708,6 +743,7 @@ void RemoteActivity::render(RenderLock&&) {
                                "crossplay-unlock claude-setup there once."
                              : "No services listed. Edit services.txt beside the helper on the Mac.";
     model.offerForget = !claude;
+    model.restartable = !claude;
     remoteui::buildStatusPage(screen, model);
     what = claude ? "Remote claude" : "Remote mac";
   } else {
