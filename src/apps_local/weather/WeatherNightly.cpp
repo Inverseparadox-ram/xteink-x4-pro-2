@@ -32,7 +32,7 @@ struct Now {
 bool readNow(Now& out) {
   struct tm local = {};
   if (!halClock.localTime(local) || local.tm_year < 120) return false;
-  char date[16];
+  char date[40];
   std::snprintf(date, sizeof(date), "%04d-%02d-%02d", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
   out.today = date;
   out.secondsIntoDay = local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec;

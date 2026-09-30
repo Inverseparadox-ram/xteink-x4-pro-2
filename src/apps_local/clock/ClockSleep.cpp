@@ -138,7 +138,7 @@ WeatherShown readWeather(const Civil& now) {
   weather::Reading reading;
   std::string message;
   if (!weather::parseForecast(body, reading, message)) return out;
-  char nowIso[24];
+  char nowIso[64];
   std::snprintf(nowIso, sizeof(nowIso), "%04u-%02u-%02uT%02u:%02u", now.year, now.month, now.day, now.hour, now.minute);
   const weather::Glance glance = weather::glanceAt(reading, nowIso);
   if (!glance.valid) return out;
