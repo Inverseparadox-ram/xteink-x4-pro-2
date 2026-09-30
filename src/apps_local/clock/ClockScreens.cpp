@@ -247,4 +247,40 @@ void buildClockFace(toybox::Screen& screen, const ClockModel& model, const Clock
                        plain(toybox::kDisplayFont, fui::TextAlign::Center));
 }
 
+ClockLayout buildSleepScreen(toybox::Screen& screen, const ClockModel& model, const char* battery) {
+  const fui::DeviceContext& device = screen.device();
+  const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
+  const int16_t gutter = static_cast<int16_t>(toybox::kGutter);
+  const int16_t uiH = screen.target().lineHeight(toybox::kUiFont);
+  const char* date = model.clockValid ? model.dateLine : "SET THE CLOCK IN SETTINGS";
+  const bool showBattery = battery != nullptr && battery[0] != '\0';
+  ClockLayout layout;
+
+  // The app's own face with the counters taken out: the band, the time, the
+  // date, and the month given the room the counters had.
+  fui::HeaderProps header;
+  header.title = "CLOCK";
+  header.borderEdges = fui::EdgesNone;
+  if (showBattery) {
+    header.rightLabel = battery;
+    header.subtitleText = screen.theme().smallText;
+    header.subtitleText.color = fui::Color::White;
+    header.subtitleText.align = fui::TextAlign::Right;
+  }
+  toybox::absoluteChrome(screen);
+  toybox::headerBand(screen, header);
+  int16_t y = static_cast<int16_t>(kBodyTop + gutter);
+  const int16_t timeH = 110;
+  layout.timeRect = fui::makeRect(toybox::kMargin, y, width, timeH);
+  layout.hugeTime = true;
+  y = static_cast<int16_t>(y + timeH);
+  screen.target().text(fui::makeRect(toybox::kMargin, y, width, uiH), date,
+                       plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray));
+  y = static_cast<int16_t>(y + uiH + gutter * 2);
+  screen.target().fill(fui::makeRect(toybox::kMargin, y, width, toybox::kRule), fui::Paint::solid(fui::Color::Black));
+  y = static_cast<int16_t>(y + toybox::kRule + gutter * 2);
+  calendar(screen, model, y, static_cast<int16_t>(device.height - toybox::kMargin * 2));
+  return layout;
+}
+
 }  // namespace clockui

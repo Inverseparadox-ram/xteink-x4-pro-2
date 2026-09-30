@@ -153,4 +153,49 @@ Cadence cadenceFor(bool stopwatchRunning, bool timerRunning);
 // late, and costs nothing that matters.
 uint32_t pollIntervalMs(Cadence cadence);
 
+// --- The sleep screen -----------------------------------------------------
+//
+// The Clock sleep screen repaints once a minute with the device asleep, which
+// means a deep-sleep timer armed for the next minute and a wake that draws and
+// goes straight back down. Two things make that more than one number.
+//
+// 1. LIVE SHARES THE TIMER. The chip has one RTC alarm, and Live reads a timer
+//    wake as "my refresh is due" -- which is right when Live armed it and a
+//    fetch a minute when the clock did. So whoever wants the EARLIER wake arms
+//    it, and the wake is told which of the two it was.
+//
+// 2. THE RC CLOCK DRIFTS. The deep-sleep timer runs on the chip's RC
+//    oscillator, which can land a wake a second early, still inside the
+//    minute already on the glass. The alarm aims one second past the boundary,
+//    and a wake that arrives early anyway draws nothing (sleepRepaintDue).
+
+// Seconds from `second` (0-59) of the current minute to one second past the
+// next minute boundary: 60 at :01, 1 at :59... never 0.
+uint32_t secondsToNextMinute(uint8_t second);
+
+struct SleepAlarm {
+  uint32_t seconds = 0;   // 0 = arm nothing
+  bool liveOwns = false;  // the wake it ends is Live's due refresh
+};
+
+// Combines Live's alarm (0 = none) with the clock's (0 = clock sleep off, or
+// no time to count from). The earlier wins; a tie goes to Live, whose wake
+// repaints the clock as well. `fallbackSeconds` is the build's own probe timer,
+// used only when neither has an opinion, and is reported as Live's so that
+// path behaves exactly as it did before the clock existed.
+SleepAlarm sleepAlarm(uint32_t liveSeconds, uint32_t clockSeconds, uint32_t fallbackSeconds);
+
+// Whether a clock-screen wake should repaint: the minute on the glass is not
+// the minute it is now. Minutes are counted since the epoch in LOCAL time, so a
+// timezone change counts as a change. `shownMinute` < 0 means nothing is known
+// about the glass, which is always a repaint.
+bool sleepRepaintDue(int64_t shownMinute, int64_t nowMinute);
+
+// Minutes since 1970-01-01 00:00 for a civil time, for sleepRepaintDue.
+int64_t minuteStamp(const Civil& local);
+
+// The panel ghosts under repeated fast refreshes; once an hour the clock pays
+// for a clean one.
+bool sleepWantsCleanRefresh(const Civil& local);
+
 }  // namespace clockapp

@@ -128,3 +128,44 @@ splits the way Connections splits its chrome from its tiles: the first pass
 draws everything at the bound faces and hands back the rect reserved for the
 time, the Activity rebinds the title slot to the large cut, and the second pass
 draws the time into it. Rebinding a slot is one assignment on the target.
+
+## As the sleep screen
+
+Settings > Sleep Screen > **Clock** puts the app's face on the glass while the
+reader sleeps: the band, the time a size larger than in the app, the date, and
+the month with today filled. The stopwatch and the timer are left out, because
+nothing on a sleeping device can be pressed. The battery percentage rides the
+band. It is also the one sleep screen that draws no "entering sleep" popup
+first, since it repaints itself sixty times an hour and a popup would flash
+across it each time.
+
+It repaints **once a minute with the device asleep**, which is the whole
+design (`src/apps_local/clock/ClockSleep.h`):
+
+- **A timer wake a minute.** Every deep sleep arms the RTC alarm for one
+  second past the next minute boundary. The wake takes main.cpp's unattended
+  path, the one Live's scheduled check uses: display and fonts up, the sleep
+  screen redrawn, straight back down. No splash, no Home, no light. A wake
+  the RC oscillator lands early, still inside the minute on the glass, draws
+  nothing and re-arms.
+- **Live shares the alarm.** The chip has one timer and Live reads a timer
+  wake as "my refresh is due". The earlier of the two alarms is armed, and
+  the wake is told whose it was (`clockapp::sleepAlarm`,
+  `ClockSleep::liveOwnsTimer`). Without that, every clock minute would be a
+  Live fetch.
+- **No flash per minute.** A minute's update is a FAST refresh. After a deep
+  sleep the controller cannot be trusted to know what is on the glass, so the
+  previous minute is drawn again first as the baseline (it is exactly what is
+  already there, so that pass changes nothing visible) and the new minute is
+  diffed against it. On the hour, and on a sleep a person asked for, it is a
+  clean HALF refresh instead, which clears the ghosting fast refreshes leave.
+  A boot that shows a UI forgets the recorded face, so the next minute after
+  it is a clean one too.
+
+**The cost is unmeasured.** Estimated at a second or two awake per minute, it
+is a few percent of the ~1100 mAh cell a day: weeks per charge rather than
+months. Any other sleep screen arms no clock timer at all and costs exactly
+what it did before.
+
+`host-tests/clock` covers the alarm and the repaint rule; `host-tests/ui`
+checks that the sleep face registers no controls and draws no counter.

@@ -10653,6 +10653,43 @@ void testTheIdleRowShowsTimeAndChargeWithoutMovingAnything() {
 // silently routed to its neighbour would go unnoticed: tapping the timer's
 // START and getting the stopwatch's looks like a stopwatch that started
 // itself.
+// The sleep screen is the app's face with nothing to press: no counter, no
+// button, not one registered control, and the month still drawn whole.
+void testTheClockSleepScreenHasNothingToPress() {
+  Rendered out;
+  clockui::ClockModel model = clockModelFor(2026, 9, 30);
+  model.time = "10:42 AM";
+  model.dateLine = "WEDNESDAY 30 SEPTEMBER";
+  {
+    const fui::DeviceContext ctx = device();
+    const fui::InputSnapshot noInput{};
+    toybox::Frame frame(out.target, ctx, noInput, out.interactions);
+    toybox::Screen screen(frame, toybox::themeTokens());
+    const clockui::ClockLayout layout = clockui::buildSleepScreen(screen, model, "85%");
+    CHECK(layout.hugeTime);
+    clockui::buildClockFace(screen, model, layout);
+  }
+  CHECK(out.interactions.count() == 0);
+  CHECK(drewText(out, "10:42 AM"));
+  CHECK(drewText(out, "WEDNESDAY 30 SEPTEMBER"));
+  CHECK(drewText(out, "85%"));
+  CHECK(drewText(out, "30"));
+  for (const char* word : {"STOPWATCH", "TIMER", "START", "RESET", "+5m"}) CHECK(!drewText(out, word));
+
+  Rendered unset;
+  clockui::ClockModel none;
+  {
+    const fui::DeviceContext ctx = device();
+    const fui::InputSnapshot noInput{};
+    toybox::Frame frame(unset.target, ctx, noInput, unset.interactions);
+    toybox::Screen screen(frame, toybox::themeTokens());
+    const clockui::ClockLayout layout = clockui::buildSleepScreen(screen, none, "");
+    clockui::buildClockFace(screen, none, layout);
+  }
+  CHECK(drewText(unset, "--:--"));
+  CHECK(drewText(unset, "SET THE CLOCK IN SETTINGS"));
+}
+
 void testEveryClockControlIsLiveAndReachable() {
   Rendered out;
   buildTheClock(out, clockModelFor(2026, 9, 20));
@@ -15862,6 +15899,7 @@ int main() {
   testADocumentEndingInANewlineIsStillWrappedOnce();
   testTheHackerNewsReaderAlsoWrapsOncePerDocument();
   testEveryClockControlIsLiveAndReachable();
+  testTheClockSleepScreenHasNothingToPress();
   testTheClockButtonLabelsFitTheirBoxes();
   testASixRowMonthDrawsEveryDay();
   testAnUnsetClockSaysSoRatherThanGuessing();

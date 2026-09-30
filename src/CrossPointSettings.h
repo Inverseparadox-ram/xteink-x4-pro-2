@@ -28,6 +28,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     TRANSPARENT_CUSTOM = 7,
     // CrossPlay: the note chosen in Notes, drawn live (apps_local/notes/NotesSleep.h).
     NOTE = 8,
+    // CrossPlay: the Clock app's face, repainted every minute while asleep
+    // (apps_local/clock/ClockSleep.h).
+    CLOCK = 9,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };

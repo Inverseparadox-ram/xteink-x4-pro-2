@@ -25,6 +25,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "activities/reader/ReaderUtils.h"
+#include "apps_local/clock/ClockSleep.h"
 #include "apps_local/notes/NotesSleep.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -519,6 +520,13 @@ void SleepActivity::onEnter() {
 
   if (renderQuickResume) {
     return renderLastScreenSleepScreen();
+  }
+
+  // CrossPlay: the clock face, drawn before the "entering sleep" popup rather
+  // than after it. It repaints itself every minute on wakes nobody sees, and a
+  // popup there would flash across a clock on a desk sixty times an hour.
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CLOCK) {
+    return clockapp::sleep::draw(renderer);
   }
 
   if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT_CUSTOM) {

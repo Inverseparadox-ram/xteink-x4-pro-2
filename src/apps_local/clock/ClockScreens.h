@@ -65,6 +65,9 @@ struct ClockModel {
 // title slot before the second pass fills it.
 struct ClockLayout {
   fui::Rect timeRect{};
+  // Which cut the second pass wants in the title slot: the sleep screen has
+  // the counters' room to spend and sets the time a size larger.
+  bool hugeTime = false;
 };
 
 // Pass one: chrome, date, counters, calendar. Everything but the time itself.
@@ -72,5 +75,11 @@ ClockLayout buildClockScreen(toybox::Screen& screen, const ClockModel& model);
 
 // Pass two: the time, in whatever the title slot is bound to now.
 void buildClockFace(toybox::Screen& screen, const ClockModel& model, const ClockLayout& layout);
+
+// The sleep screen: the time, the date and the month, with the counters left
+// out because nothing on a sleeping device can be pressed. `battery` is "82%",
+// or empty to leave it off. Pass one of two, exactly like the app's screen;
+// buildClockFace is pass two.
+ClockLayout buildSleepScreen(toybox::Screen& screen, const ClockModel& model, const char* battery);
 
 }  // namespace clockui

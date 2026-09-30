@@ -83,7 +83,7 @@ the import lands a real pack instead of failing on an unreachable host.
 | **Study**       | Anki decks with the FSRS scheduler, offline.                             |
 | **Hacker News** | The front page in a reading serif, articles kept on the card.            |
 | **xkcd**        | The archive, packed for the card and drawn one to one.                   |
-| **Clock**       | The time and the month, with a stopwatch and a timer up to 59:59.        |
+| **Clock**       | The time and the month, a stopwatch, a timer, and a sleep screen that keeps time. |
 | **Weather**     | A full forecast for any place, from Open-Meteo, kept readable on the card. |
 | **Remote**      | A Bluetooth media remote for whatever your Mac is playing.               |
 | **Stocks**      | A NASDAQ and NSE watchlist, what it is worth, today or the last ten days. |

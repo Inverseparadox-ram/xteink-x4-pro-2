@@ -38,6 +38,7 @@
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "apps_local/Shelf.h"
+#include "apps_local/clock/ClockSleep.h"
 #include "apps_local/live/LiveEngine.h"
 #include "apps_local/powerprobe/PowerProbe.h"
 
@@ -372,8 +373,8 @@ CROSSPLAY_SLEEP_NORETURN static void startDeepSleepArmed(const uint64_t timerMic
 // (card #620). Live's own number when it has one, the build's otherwise: the
 // same choice enterDeepSleep makes.
 [[maybe_unused]] static uint64_t resleepTimerMicros() {
-  const uint32_t liveSeconds = live::engine::resleepSeconds();
-  return liveSeconds > 0 ? static_cast<uint64_t>(liveSeconds) * 1000000ULL : kTimerWakeMicros;
+  // Through the clock, so a bump does not cost the Clock sleep screen its minute.
+  return clockapp::sleep::armMicros(live::engine::resleepSeconds(), kTimerWakeMicros);
 }
 
 // Enter deep sleep mode
@@ -411,6 +412,9 @@ void enterDeepSleep(bool fromTimeout = false, bool unattended = false) {
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
   deepSleepInProgress = true;
+  // The Clock sleep screen may only take its fast, flash-free refresh on a
+  // wake nobody asked for; a person's own sleep gets the clean one.
+  clockapp::sleep::setUnattended(unattended);
   activityManager.goToSleep(fromTimeout);
 
   // LIVE, and this is the whole wake rule in three lines: the sleep screen is
@@ -457,8 +461,9 @@ void enterDeepSleep(bool fromTimeout = false, bool unattended = false) {
   // build-time constant stays as the power probe's own wake: it exists so a
   // sleeping board can be measured at all, and a device with Live off is still
   // the device that measurement describes.
-  const uint64_t timerMicros =
-      liveTimerSeconds > 0 ? static_cast<uint64_t>(liveTimerSeconds) * 1000000ULL : kTimerWakeMicros;
+  // The Clock sleep screen folds its next minute in here; with it off this is
+  // exactly Live's number or the build's.
+  const uint64_t timerMicros = clockapp::sleep::armMicros(liveTimerSeconds, kTimerWakeMicros);
   startDeepSleepArmed(timerMicros);
 }
 
@@ -730,14 +735,19 @@ void setup() {
       unattendedWakeMagic = UNATTENDED_WAKE_MAGIC;
       LOG_DBG("MAIN", "Timer wake: checking Live");
       bool timerBroughtSomething = false;
-      const uint32_t nextWake = live::engine::onSleep(timerBroughtSomething, /*timerFired=*/true);
-      if (timerBroughtSomething) {
+      // Only a timer Live armed is Live's refresh coming due. The Clock sleep
+      // screen arms one a minute, and telling Live each of those had fired
+      // would be a fetch a minute.
+      const bool liveTimer = clockapp::sleep::liveOwnsTimer();
+      const uint32_t nextWake = live::engine::onSleep(timerBroughtSomething, /*timerFired=*/liveTimer);
+      if (timerBroughtSomething || clockapp::sleep::repaintDue()) {
         // A new message arrived, and drawing it needs the display and the fonts
         // that this path deliberately skipped. Breaking out of the switch lets
         // setup() finish, which paints and then sleeps again through
         // enterDeepSleep -- the same path every other sleep takes, so the image
         // reaches the glass through one piece of code rather than two.
-        LOG_INF("MAIN", "Timer wake brought a new message; booting far enough to draw it");
+        LOG_INF("MAIN", timerBroughtSomething ? "Timer wake brought a new message; booting far enough to draw it"
+                                              : "Timer wake for the clock face; booting far enough to draw it");
         break;
       }
       // Nothing new. Straight back down, with Live's own number when it has one
@@ -745,7 +755,7 @@ void setup() {
       // probe's fixed interval.
       powerprobe::beforeSleep();
       Storage.prepareForDeepSleep();
-      startDeepSleepArmed(nextWake > 0 ? static_cast<uint64_t>(nextWake) * 1000000ULL : kTimerWakeMicros);
+      startDeepSleepArmed(clockapp::sleep::armMicros(nextWake, kTimerWakeMicros));
       break;
     }
 #endif
@@ -815,6 +825,10 @@ void setup() {
     enterDeepSleep(/*fromTimeout=*/false, /*unattended=*/true);
     return;  // startDeepSleepArmed() does not return; this is for the reader
   }
+
+  // A person is here, so whatever the clock face last drew is about to be
+  // replaced; its next unattended minute must repaint cleanly.
+  clockapp::sleep::forgetGlass();
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
   LOG_DBG("MAIN", "Starting CrossPlay version " CROSSPOINT_VERSION);

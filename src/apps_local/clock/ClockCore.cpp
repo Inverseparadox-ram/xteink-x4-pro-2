@@ -135,4 +135,44 @@ Cadence cadenceFor(const bool stopwatchRunning, const bool timerRunning) {
 
 uint32_t pollIntervalMs(const Cadence cadence) { return cadence == Cadence::Second ? 250u : 1000u; }
 
+// --- The sleep screen -----------------------------------------------------
+
+uint32_t secondsToNextMinute(const uint8_t second) {
+  const uint32_t s = second > 59 ? 59 : second;
+  return 61 - s > 60 ? 60 : 61 - s;
+}
+
+SleepAlarm sleepAlarm(const uint32_t liveSeconds, const uint32_t clockSeconds, const uint32_t fallbackSeconds) {
+  SleepAlarm alarm;
+  if (liveSeconds > 0 && (clockSeconds == 0 || liveSeconds <= clockSeconds)) {
+    alarm.seconds = liveSeconds;
+    alarm.liveOwns = true;
+  } else if (clockSeconds > 0) {
+    alarm.seconds = clockSeconds;
+    alarm.liveOwns = false;
+  } else {
+    alarm.seconds = fallbackSeconds;
+    alarm.liveOwns = true;
+  }
+  return alarm;
+}
+
+bool sleepRepaintDue(const int64_t shownMinute, const int64_t nowMinute) {
+  return shownMinute < 0 || shownMinute != nowMinute;
+}
+
+int64_t minuteStamp(const Civil& local) {
+  // Days from civil, Howard Hinnant's algorithm.
+  const int y = static_cast<int>(local.year) - (local.month <= 2 ? 1 : 0);
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = static_cast<unsigned>(y - era * 400);
+  const unsigned m = local.month;
+  const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + local.day - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const int64_t days = static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+  return days * 1440 + local.hour * 60 + local.minute;
+}
+
+bool sleepWantsCleanRefresh(const Civil& local) { return local.minute == 0; }
+
 }  // namespace clockapp

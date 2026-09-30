@@ -155,12 +155,71 @@ static void testTheExpensiveCadenceOnlyRunsWhileSomethingCounts() {
   CHECK(clockapp::pollIntervalMs(clockapp::Cadence::Second) <= 1000, "a running second is never missed");
 }
 
+static void testTheSleepAlarm() {
+  CHECK(clockapp::secondsToNextMinute(0) == 60, "sleep 1");
+  CHECK(clockapp::secondsToNextMinute(1) == 60, "sleep 2");
+  CHECK(clockapp::secondsToNextMinute(30) == 31, "sleep 3");
+  CHECK(clockapp::secondsToNextMinute(59) == 2, "sleep 4");
+  CHECK(clockapp::secondsToNextMinute(200) == 2, "sleep 5");
+
+  // Clock off: exactly what the device did before the clock existed.
+  clockapp::SleepAlarm a = clockapp::sleepAlarm(3600, 0, 0);
+  CHECK(a.seconds == 3600 && a.liveOwns, "sleep 6");
+  a = clockapp::sleepAlarm(0, 0, 0);
+  CHECK(a.seconds == 0, "sleep 7");
+  a = clockapp::sleepAlarm(0, 0, 120);
+  CHECK(a.seconds == 120 && a.liveOwns, "sleep 8");
+
+  // Clock on: the minute wins over Live's hour, and that wake is NOT Live's --
+  // otherwise Live would fetch every minute.
+  a = clockapp::sleepAlarm(3600, 45, 0);
+  CHECK(a.seconds == 45 && !a.liveOwns, "sleep 9");
+  a = clockapp::sleepAlarm(0, 45, 120);
+  CHECK(a.seconds == 45 && !a.liveOwns, "sleep 10");
+  // Live due first, or on the same second: Live's wake, which repaints too.
+  a = clockapp::sleepAlarm(20, 45, 0);
+  CHECK(a.seconds == 20 && a.liveOwns, "sleep 11");
+  a = clockapp::sleepAlarm(45, 45, 0);
+  CHECK(a.seconds == 45 && a.liveOwns, "sleep 12");
+}
+
+static void testTheSleepRepaint() {
+  clockapp::Civil t;
+  t.year = 2026;
+  t.month = 9;
+  t.day = 30;
+  t.hour = 10;
+  t.minute = 42;
+  const int64_t now = clockapp::minuteStamp(t);
+  // 2026-09-30 10:42 is 1790764920 seconds after the epoch.
+  CHECK(now == 1790764920 / 60, "sleep 13");
+  CHECK(!clockapp::sleepRepaintDue(now, now), "sleep 14");
+  CHECK(clockapp::sleepRepaintDue(now - 1, now), "sleep 15");
+  CHECK(clockapp::sleepRepaintDue(-1, now), "sleep 16");
+  clockapp::Civil leap = t;
+  leap.year = 2024;
+  leap.month = 3;
+  leap.day = 1;
+  leap.hour = 0;
+  leap.minute = 0;
+  clockapp::Civil before = leap;
+  before.month = 2;
+  before.day = 29;
+  before.hour = 23;
+  before.minute = 59;
+  CHECK(clockapp::minuteStamp(leap) - clockapp::minuteStamp(before) == 1, "sleep 17");
+  CHECK(!clockapp::sleepWantsCleanRefresh(t), "sleep 18");
+  CHECK(clockapp::sleepWantsCleanRefresh(leap), "sleep 19");
+}
+
 int main() {
   testWeekdaysAndLeapYears();
   testTheGridAsksHowManyRowsItNeeds();
   testTheReadouts();
   testTheTimerFieldsWrapWithinThemselves();
   testTheExpensiveCadenceOnlyRunsWhileSomethingCounts();
+  testTheSleepAlarm();
+  testTheSleepRepaint();
   std::printf("%s  clock core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;
 }

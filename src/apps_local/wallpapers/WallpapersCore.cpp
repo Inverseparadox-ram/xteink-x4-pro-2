@@ -208,6 +208,8 @@ const char* sleepScreenModeName(const uint8_t sleepScreenMode) {
       return "Transparent";
     case kSleepNote:
       return "Note";
+    case kSleepClock:
+      return "Clock";
     default:
       return "Unknown";
   }
@@ -262,6 +264,8 @@ const char* modeTakeoverNote(const uint8_t previousMode) {
       return "Was Transparent, now Custom.";
     case kSleepNote:
       return "Was Note, now Custom.";
+    case kSleepClock:
+      return "Was Clock, now Custom.";
     default:
       return nullptr;
   }
