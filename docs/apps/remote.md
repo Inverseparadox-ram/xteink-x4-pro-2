@@ -307,8 +307,9 @@ while it is open, and on REFRESH at the foot of the page, and the helper
 answers with the whole board whether or not it changed. The reader counts
 complete boards per list (`StatusAssembler::arrivals`), so an unchanged answer
 still reads as an answer: the line above REFRESH says *Updated 14:32*, or *The
-Mac did not answer* after eight seconds. The helper sends unasked only while a
-restart the reader asked for is running. A board is drawn only when its last row has arrived, so the page
+Mac did not answer* after eight seconds. The helper never sends unasked, not
+even a restart's progress: RESTART is followed by one pull, which reads
+*restarting*, and REFRESH shows the rest. A board is drawn only when its last row has arrived, so the page
 never shows half of one list over half of another. Each row is a name, a detail
 line and one status word; *awaiting input* and *failed* are set in reverse,
 because those are the ones that want a person.
@@ -324,9 +325,10 @@ because those are the ones that want a person.
   refuses a restart whose check does not match its row now, so a list that
   changed between the draw and the tap restarts nothing rather than the wrong
   service. The helper tries the service's start command and, if that does not
-  bring it back, asks Claude Code in one standing "Service doctor" chat; the
-  row's detail line follows along (*restarting*, *asking Claude*, then the
-  answer). The reader only asks; everything after is the Mac's.
+  bring it back, asks Claude Code in one standing "Service doctor" chat. The
+  row's detail line says where that has got to (*restarting*, *asking
+  Claude*, then the answer) whenever the board is pulled. The reader only
+  asks; everything after is the Mac's.
 
 With no helper connected both pages say so in words, rather than drawing an
 empty list that reads as "nothing running". See

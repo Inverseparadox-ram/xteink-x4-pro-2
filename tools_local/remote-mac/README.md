@@ -189,9 +189,10 @@ Both pages are **pulled**: the reader asks for a list when the page opens,
 when the Mac helper reconnects while it is open, and when REFRESH is tapped
 (`[1, 4, board]` on the command characteristic), and the helper answers with
 the whole list, changed or not. Nothing is checked or sent while nobody is
-looking. The one exception is a restart the reader asked for, whose progress
-(*restarting*, *asking Claude*, the answer) the helper sends as it happens.
-The page says when it was last updated, or that the Mac did not answer within
+looking, and nothing is sent unasked, a restart's progress included: the
+reader pulls the MAC board once right after RESTART (the row then reads
+*restarting*), and REFRESH shows *restarted*, *asking Claude* or Claude's
+answer as they come. The page says when it was last updated, or that the Mac did not answer within
 eight seconds.
 
 **MAC** lists your own background services from `services.txt` beside the
@@ -240,7 +241,7 @@ in the meantime cannot restart the wrong thing). The helper runs the line's
 START, or for `launchd` and `docker` lines one it knows
 (`launchctl kickstart -k`, falling back to `launchctl bootstrap`;
 `docker start`). The row reads *restarting* meanwhile, and *restarted* if it is
-back eight seconds later.
+back eight seconds later; the reader sees each when it pulls (REFRESH).
 
 **3. The Service doctor.** If the restart did not bring it back, the helper
 asks Claude Code, headless (`claude -p`), with what the check says, the start

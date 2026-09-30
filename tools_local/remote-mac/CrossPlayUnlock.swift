@@ -1122,10 +1122,12 @@ final class Services {
     }
 
     // RESTART from the reader. One at a time, off the main thread: the
-    // recipe first, and the Service doctor only when that did not work.
+    // recipe first, and the Service doctor only when that did not work. Its
+    // progress goes into the row's override and is sent only when the reader
+    // pulls the board, like everything else on it.
     static let restartQueue = DispatchQueue(label: "crossplay.restart")
 
-    static func restart(row: Int, check: UInt8, changed: @escaping () -> Void) {
+    static func restart(row: Int, check: UInt8) {
         let all = lines()
         guard row >= 0, row < min(all.count, Wire.statusRowsMax) else {
             log("restart: no row \(row)")
@@ -1136,10 +1138,11 @@ final class Services {
             log("restart: row \(row) is no longer the one the reader showed; refused")
             return
         }
+        // Before anything is queued, so the pull the reader sends straight
+        // after the restart already reads "restarting".
+        setOverride(line.name, .inProcess, "restarting", for: 600)
         restartQueue.async {
             log("restart: \(line.name)")
-            Services.setOverride(line.name, .inProcess, "restarting", for: 600)
-            DispatchQueue.main.async(execute: changed)
             var printed = ""
             let startCommand = Services.recipe(line)
             if let startCommand = startCommand {
@@ -1151,16 +1154,13 @@ final class Services {
             let (after, afterDetail) = Services.check(line.check)
             if after == .running {
                 Services.setOverride(line.name, .running, "restarted", for: 120)
-                DispatchQueue.main.async(execute: changed)
                 return
             }
             Services.setOverride(line.name, .inProcess, "asking Claude", for: 900)
-            DispatchQueue.main.async(execute: changed)
             let answer = Doctor.ask(about: line, recipe: startCommand, printed: printed,
                                     state: "\(after) (\(afterDetail))")
             let (settled, _) = Services.check(line.check)
             Services.setOverride(line.name, settled == .running ? .running : .failed, answer, for: 1800)
-            DispatchQueue.main.async(execute: changed)
         }
     }
 }
@@ -1406,9 +1406,6 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private var nowPlayingCharacteristic: CBCharacteristic?
     private var macStateCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
-    // What each board last sent, so a restart's progress goes out only when
-    // it changed. A pull is answered whatever this holds.
-    private var sentBoards: [UInt8: [Data]] = [:]
     // Pulls that came before there was a status characteristic to answer on.
     private var pendingPulls: Set<UInt8> = []
     private let checkQueue = DispatchQueue(label: "crossplay.services")
@@ -1468,13 +1465,11 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     // The services checks spawn processes, so they run off the main thread.
-    // `force` is a pull: answered even when nothing changed, because the
-    // reader is waiting for an answer.
-    private func refreshServices(force: Bool = false) {
+    private func answerServices() {
         checkQueue.async { [weak self] in
             let rows = Services.rows()
             DispatchQueue.main.async {
-                self?.sendBoard(Wire.boardServices, rows, force: force)
+                self?.sendBoard(Wire.boardServices, rows)
             }
         }
     }
@@ -1483,26 +1478,26 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         switch board {
         case Wire.boardClaude:
             log("the reader asked for the CLAUDE board")
-            sendBoard(Wire.boardClaude, ClaudeSessions.rows(), force: true)
+            sendBoard(Wire.boardClaude, ClaudeSessions.rows())
         case Wire.boardServices:
             log("the reader asked for the MAC board")
-            refreshServices(force: true)
+            answerServices()
         default:
             log("the reader asked for board \(board), which does not exist")
         }
     }
 
-    // Row by row, with responses so a failed write is logged. Unforced (a
-    // restart's progress) it goes out only when it changed.
-    private func sendBoard(_ board: UInt8, _ rows: [StatusRow], force: Bool = false) {
-        let frames = statusFrames(board: board, rows: rows)
-        guard force || frames != sentBoards[board] else { return }
+    // The answer to a pull, and the only way a board leaves this Mac: the
+    // whole board, changed or not, row by row, with responses so a failed
+    // write is logged. The reader asks again with REFRESH.
+    private func sendBoard(_ board: UInt8, _ rows: [StatusRow]) {
         guard let characteristic = statusCharacteristic, let peripheral = reader else {
-            if force { pendingPulls.insert(board) }
+            pendingPulls.insert(board)
             return
         }
-        for frame in frames { peripheral.writeValue(frame, for: characteristic, type: .withResponse) }
-        sentBoards[board] = frames
+        for frame in statusFrames(board: board, rows: rows) {
+            peripheral.writeValue(frame, for: characteristic, type: .withResponse)
+        }
     }
 
     private func handleCommand(_ frame: Data) {
@@ -1512,7 +1507,7 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             return
         }
         if bytes.count == 4, bytes[0] == Wire.macLinkVersion, bytes[1] == Wire.commandRestart {
-            Services.restart(row: Int(bytes[2]), check: bytes[3]) { [weak self] in self?.refreshServices() }
+            Services.restart(row: Int(bytes[2]), check: bytes[3])
             return
         }
         guard bytes.count == 2, bytes[0] == Wire.macLinkVersion else {
@@ -1538,7 +1533,6 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         // Try again next time rather than believing the reader has it.
         if characteristic.uuid == Wire.nowPlaying { lastSent = nil }
         if characteristic.uuid == Wire.macState { lastMacState = nil }
-        if characteristic.uuid == Wire.status { sentBoards = [:] }
     }
 
     func centralManagerDidUpdateState(_ manager: CBCentralManager) {
@@ -1586,7 +1580,6 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         macStateCharacteristic = nil
         lastMacState = nil
         statusCharacteristic = nil
-        sentBoards = [:]
         // The reader takes its radio down when the app closes, so a
         // disconnection is normal rather than a failure. Reconnect stays
         // pending until it advertises again.
@@ -1614,7 +1607,6 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             if characteristic.uuid == Wire.status {
                 // Nothing is sent until the reader asks for it.
                 statusCharacteristic = characteristic
-                sentBoards = [:]
                 let waiting = pendingPulls
                 pendingPulls = []
                 for board in waiting.sorted() { answerPull(board) }

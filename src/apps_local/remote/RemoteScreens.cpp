@@ -510,7 +510,7 @@ void buildRestartConfirm(toybox::Screen& screen, const RestartModel& model) {
   y = static_cast<int16_t>(y + lineH + toybox::kGutter);
   target.text(fui::makeRect(toybox::kMargin, y, width, static_cast<int16_t>(lineH * 7)),
               "The Mac starts it again. If it is still down, Claude Code looks into it in the Service doctor "
-              "chat, and this row shows what it found.",
+              "chat. Tap REFRESH to see how it went.",
               plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray, 7));
 
   const int16_t footerY = static_cast<int16_t>(device.height - toybox::kMargin - kFooterHeight);

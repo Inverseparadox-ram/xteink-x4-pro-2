@@ -704,6 +704,9 @@ void RemoteActivity::loop() {
       RenderLock lock(*this);
       restartRow_ = -1;
       phase_ = Phase::Remote;
+      // The Mac marks the row before it answers, so this pull reads
+      // "restarting"; what happens after is REFRESH's to fetch.
+      askForBoard(1);
       requestUpdate();
       break;
     }
