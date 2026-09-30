@@ -11,12 +11,12 @@
 // told whose it was.
 //
 // The refresh is a FAST one over the minute before it, so the panel does not
-// flash every minute. After a deep sleep the controller's idea of what is on
-// the glass cannot be trusted, so the previous minute is drawn again first as
-// the baseline -- it is exactly what is already on the glass, so that pass
-// changes nothing visible -- and the new minute is diffed against it. Once an
-// hour, and on the sleep a person asked for, it is a clean HALF refresh
-// instead, which is what clears the ghosting fast refreshes leave.
+// flash every minute. A deep sleep wipes the controller's copy of what is on
+// the glass, so the previous minute is rendered again and loaded into the
+// controller's previous-frame plane without a refresh, and the new minute is
+// diffed against it in one waveform. Once an hour, and on the sleep a person
+// asked for, it is a clean HALF refresh instead, which is what clears the
+// ghosting fast refreshes leave.
 
 #include <cstdint>
 

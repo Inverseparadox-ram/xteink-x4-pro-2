@@ -143,6 +143,10 @@ void HalDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) { einkDisplay
 
 void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.cleanupGrayscaleBuffers(bwBuffer); }
 
+void HalDisplay::displayWholeFrameDifferential() {
+  einkDisplay.displayWindow(0, 0, einkDisplay.getDisplayWidth(), einkDisplay.getDisplayHeight(), false);
+}
+
 void HalDisplay::displayGrayBuffer(bool turnOffScreen) { einkDisplay.displayGrayBuffer(turnOffScreen); }
 
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {

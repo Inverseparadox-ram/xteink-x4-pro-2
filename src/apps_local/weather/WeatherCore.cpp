@@ -527,4 +527,87 @@ std::string exportText(const Place& place, const Reading& reading) {
   return out;
 }
 
+// --- A glance, for the Clock sleep screen ------------------------------------
+
+Sky skyFor(const int code, const bool daytime) {
+  if (code < 0) return Sky::Unknown;
+  if (code <= 1) return daytime ? Sky::Sunny : Sky::Clear;
+  if (code == 2) return Sky::PartlyCloudy;
+  if (code == 3) return Sky::Cloudy;
+  if (code == 45 || code == 48) return Sky::Fog;
+  if (code >= 51 && code <= 57) return Sky::Drizzle;
+  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return Sky::Rain;
+  if ((code >= 71 && code <= 77) || code == 85 || code == 86) return Sky::Snow;
+  if (code >= 95 && code <= 99) return Sky::Storm;
+  return Sky::Unknown;
+}
+
+const char* skyWord(const Sky sky) {
+  switch (sky) {
+    case Sky::Sunny:
+      return "Sunny";
+    case Sky::Clear:
+      return "Clear";
+    case Sky::PartlyCloudy:
+      return "Partly cloudy";
+    case Sky::Cloudy:
+      return "Cloudy";
+    case Sky::Fog:
+      return "Fog";
+    case Sky::Drizzle:
+      return "Drizzle";
+    case Sky::Rain:
+      return "Rain";
+    case Sky::Snow:
+      return "Snow";
+    case Sky::Storm:
+      return "Storm";
+    case Sky::Unknown:
+      break;
+  }
+  return "";
+}
+
+Glance glanceAt(const Reading& reading, const std::string& nowLocal) {
+  Glance out;
+  if (nowLocal.size() < 16) return out;
+  const std::string hourKey = nowLocal.substr(0, 13);  // "2026-09-30T14"
+  const std::string dateKey = nowLocal.substr(0, 10);  // "2026-09-30"
+  const std::string clock = nowLocal.substr(11, 5);    // "14:07"
+
+  const Day* today = nullptr;
+  for (const Day& day : reading.days) {
+    if (day.date == dateKey) today = &day;
+  }
+  // Daytime from today's own sun times when the forecast carries them, which
+  // is the difference between "Sunny" at 18:30 in June and in December.
+  bool daytime = clock >= "06:00" && clock < "18:00";
+  if (today != nullptr && today->sunrise.size() >= 16 && today->sunset.size() >= 16) {
+    daytime = clock >= today->sunrise.substr(11, 5) && clock < today->sunset.substr(11, 5);
+  }
+
+  const Hour* hour = nullptr;
+  for (const Hour& h : reading.hours) {
+    if (h.time.compare(0, hourKey.size(), hourKey) == 0) hour = &h;
+  }
+
+  if (hour != nullptr && hour->code >= 0) {
+    out.sky = skyFor(hour->code, daytime);
+    out.temperature = hour->temperature;
+    out.rainChance = hour->precipProbability;
+  } else if (today != nullptr && today->code >= 0) {
+    out.sky = skyFor(today->code, daytime);
+    out.rainChance = today->precipProbability;
+  } else {
+    return out;
+  }
+  if (today != nullptr) {
+    out.high = today->high;
+    out.low = today->low;
+    if (!out.rainChance.has) out.rainChance = today->precipProbability;
+  }
+  out.valid = out.sky != Sky::Unknown;
+  return out;
+}
+
 }  // namespace weather

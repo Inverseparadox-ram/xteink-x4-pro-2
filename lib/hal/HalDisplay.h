@@ -105,6 +105,15 @@ class HalDisplay {
   void copyGrayscaleMsbBuffers(const uint8_t* msbBuffer);
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
 
+  // CrossPlay: the whole frame through the driver's windowed FAST path. For a
+  // caller that has just seeded the controller's previous-frame plane with
+  // cleanupGrayscaleBuffers() and knows the glass shows exactly that frame --
+  // the Clock sleep screen after a timer wake. The ordinary FAST path cannot
+  // serve it: the first paint after begin() is promoted to a full, flashing
+  // refresh on the SSD1677 (its _needsInitialFull one-shot), and the windowed
+  // path is the one route that honours a seeded baseline instead.
+  void displayWholeFrameDifferential();
+
   void displayGrayBuffer(bool turnOffScreen = false);
 
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)

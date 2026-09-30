@@ -214,4 +214,34 @@ std::string exportText(const Place& place, const Reading& reading);
 // name are two files and a rename can never land on another place's export.
 std::string exportFileName(const Place& place);
 
+// --- A glance, for the Clock sleep screen ------------------------------------
+//
+// The sleep clock carries one line of weather from the forecast this app last
+// saved, and never fetches: it wakes every minute, and a radio a minute is a
+// battery a day. So the glance is the saved forecast's hour that NOW falls in,
+// which stays honest for as long as the forecast reaches -- 24 hours of hours,
+// then today's row of the week -- and disappears after that rather than
+// showing yesterday's weather as today's.
+
+enum class Sky : uint8_t { Unknown, Sunny, Clear, PartlyCloudy, Cloudy, Fog, Drizzle, Rain, Snow, Storm };
+
+// WMO code to a sky. 0 and 1 are Sunny by day and Clear by night.
+Sky skyFor(int code, bool daytime);
+
+// "Sunny", "Partly cloudy"... "" for Unknown.
+const char* skyWord(Sky sky);
+
+struct Glance {
+  bool valid = false;
+  Sky sky = Sky::Unknown;
+  Value temperature;  // the hour's; absent when only the day was found
+  Value rainChance;   // %, the hour's or else the day's maximum
+  Value high;         // today's
+  Value low;
+};
+
+// `nowLocal` is "YYYY-MM-DDTHH:MM" on the reader's clock, which is taken to be
+// the place's own local time (the forecast is fetched with timezone=auto).
+Glance glanceAt(const Reading& reading, const std::string& nowLocal);
+
 }  // namespace weather

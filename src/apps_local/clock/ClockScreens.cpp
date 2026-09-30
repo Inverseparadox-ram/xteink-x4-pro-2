@@ -1,6 +1,9 @@
 #include "ClockScreens.h"
 
+#include <FreeInkUIIcon.h>
+
 #include <cstdio>
+#include <string>
 
 #include "../ui/ToyboxText.h"
 
@@ -247,7 +250,92 @@ void buildClockFace(toybox::Screen& screen, const ClockModel& model, const Clock
                        plain(toybox::kDisplayFont, fui::TextAlign::Center));
 }
 
-ClockLayout buildSleepScreen(toybox::Screen& screen, const ClockModel& model, const char* battery) {
+#ifndef CLOCK_WEATHER_VARIANT
+#define CLOCK_WEATHER_VARIANT 1
+#endif
+
+// The weather strip, `top` down; returns the height it used (0 when absent).
+static int16_t sleepWeather(toybox::Screen& screen, const SleepWeather& weather, const int16_t top) {
+  if (!weather.present) return 0;
+  const fui::DeviceContext& device = screen.device();
+  fui::DrawTarget& target = screen.target();
+  const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
+  const int16_t uiH = target.lineHeight(toybox::kUiFont);
+  const int16_t smallH = target.lineHeight(toybox::kTileFont);
+  const int16_t iconSize = 32;
+  const fui::TextStyle ui = plain(toybox::kUiFont, fui::TextAlign::Left);
+  const fui::TextStyle small = plain(toybox::kTileFont, fui::TextAlign::Left, fui::Color::DarkGray);
+  char rainLine[24];
+  std::snprintf(rainLine, sizeof(rainLine), "RAIN %s", weather.rain);
+  (void)small;
+  (void)smallH;
+  (void)ui;
+
+#if CLOCK_WEATHER_VARIANT == 1
+  // One centred line: the mark, the temperature, the sky, the rain chance.
+  std::string line;
+  if (weather.temperature[0] != '\0') line = weather.temperature;
+  if (weather.sky[0] != '\0') line += line.empty() ? weather.sky : std::string("  ") + weather.sky;
+  if (weather.rain[0] != '\0') line += std::string("  .  ") + rainLine;
+  const int16_t textW = target.measureText(ui.font, line.c_str(), ui).width;
+  const int16_t total = static_cast<int16_t>((weather.icon ? iconSize + 8 : 0) + textW);
+  int16_t x = static_cast<int16_t>(toybox::kMargin + (width - total) / 2);
+  if (x < toybox::kMargin) x = static_cast<int16_t>(toybox::kMargin);
+  const int16_t rowH = uiH > iconSize ? uiH : iconSize;
+  if (weather.icon != nullptr) {
+    target.bitmap(fui::makeRect(x, static_cast<int16_t>(top + (rowH - iconSize) / 2), iconSize, iconSize),
+                  fui::bitmapFromIcon(*weather.icon), fui::BitmapMode::Center);
+    x = static_cast<int16_t>(x + iconSize + 8);
+  }
+  target.text(fui::makeRect(x, static_cast<int16_t>(top + (rowH - uiH) / 2),
+                            static_cast<int16_t>(toybox::kMargin + width - x), uiH),
+              toybox::fitLines(target, line.c_str(), static_cast<int16_t>(toybox::kMargin + width - x), 1, ui).c_str(),
+              ui);
+  return rowH;
+#elif CLOCK_WEATHER_VARIANT == 2
+  // Three cells side by side, a small label over each value.
+  const int16_t cell = static_cast<int16_t>(width / 3);
+  const char* labels[3] = {"NOW", "TEMP", "RAIN"};
+  const char* values[3] = {weather.sky, weather.temperature[0] ? weather.temperature : weather.highLow, weather.rain};
+  const fui::TextStyle label = plain(toybox::kTileFont, fui::TextAlign::Center, fui::Color::DarkGray);
+  const fui::TextStyle value = plain(toybox::kUiFont, fui::TextAlign::Center);
+  for (int i = 0; i < 3; ++i) {
+    const int16_t x = static_cast<int16_t>(toybox::kMargin + i * cell);
+    int16_t labelX = x;
+    int16_t labelW = cell;
+    if (i == 0 && weather.icon != nullptr) {
+      target.bitmap(fui::makeRect(static_cast<int16_t>(x + (cell - iconSize) / 2), top, iconSize, iconSize),
+                    fui::bitmapFromIcon(*weather.icon), fui::BitmapMode::Center);
+    } else {
+      target.text(fui::makeRect(labelX, static_cast<int16_t>(top + (iconSize - smallH) / 2), labelW, smallH), labels[i],
+                  label);
+    }
+    target.text(fui::makeRect(x, static_cast<int16_t>(top + iconSize), cell, uiH),
+                toybox::fitLines(target, values[i], static_cast<int16_t>(cell - 4), 1, value).c_str(), value);
+  }
+  return static_cast<int16_t>(iconSize + uiH);
+#else
+  // The mark on the left, two lines beside it: what it is, then the rain and
+  // the day's range.
+  const int16_t left = static_cast<int16_t>(toybox::kMargin + width / 4);
+  if (weather.icon != nullptr) {
+    target.bitmap(fui::makeRect(static_cast<int16_t>(left - iconSize - 12),
+                                static_cast<int16_t>(top + (uiH + smallH - iconSize) / 2), iconSize, iconSize),
+                  fui::bitmapFromIcon(*weather.icon), fui::BitmapMode::Center);
+  }
+  std::string first = weather.temperature;
+  if (weather.sky[0] != '\0') first += first.empty() ? weather.sky : std::string("  ") + weather.sky;
+  std::string second = rainLine;
+  if (weather.highLow[0] != '\0') second += std::string("  .  ") + weather.highLow;
+  const int16_t textW = static_cast<int16_t>(toybox::kMargin + width - left);
+  target.text(fui::makeRect(left, top, textW, uiH), toybox::fitLines(target, first.c_str(), textW, 1, ui).c_str(), ui);
+  target.text(fui::makeRect(left, static_cast<int16_t>(top + uiH), textW, smallH), second.c_str(), small);
+  return static_cast<int16_t>(uiH + smallH);
+#endif
+}
+
+ClockLayout buildSleepScreen(toybox::Screen& screen, const ClockModel& model, const char* battery,
+                             const SleepWeather& weather) {
   const fui::DeviceContext& device = screen.device();
   const int16_t width = static_cast<int16_t>(device.width - 2 * toybox::kMargin);
   const int16_t gutter = static_cast<int16_t>(toybox::kGutter);
@@ -276,7 +364,10 @@ ClockLayout buildSleepScreen(toybox::Screen& screen, const ClockModel& model, co
   y = static_cast<int16_t>(y + timeH);
   screen.target().text(fui::makeRect(toybox::kMargin, y, width, uiH), date,
                        plain(toybox::kUiFont, fui::TextAlign::Center, fui::Color::DarkGray));
-  y = static_cast<int16_t>(y + uiH + gutter * 2);
+  y = static_cast<int16_t>(y + uiH + gutter);
+  const int16_t weatherH = sleepWeather(screen, weather, y);
+  if (weatherH > 0) y = static_cast<int16_t>(y + weatherH);
+  y = static_cast<int16_t>(y + gutter);
   screen.target().fill(fui::makeRect(toybox::kMargin, y, width, toybox::kRule), fui::Paint::solid(fui::Color::Black));
   y = static_cast<int16_t>(y + toybox::kRule + gutter * 2);
   calendar(screen, model, y, static_cast<int16_t>(device.height - toybox::kMargin * 2));

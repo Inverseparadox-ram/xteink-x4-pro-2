@@ -153,14 +153,26 @@ design (`src/apps_local/clock/ClockSleep.h`):
   the wake is told whose it was (`clockapp::sleepAlarm`,
   `ClockSleep::liveOwnsTimer`). Without that, every clock minute would be a
   Live fetch.
-- **No flash per minute.** A minute's update is a FAST refresh. After a deep
-  sleep the controller cannot be trusted to know what is on the glass, so the
-  previous minute is drawn again first as the baseline (it is exactly what is
-  already there, so that pass changes nothing visible) and the new minute is
-  diffed against it. On the hour, and on a sleep a person asked for, it is a
-  clean HALF refresh instead, which clears the ghosting fast refreshes leave.
-  A boot that shows a UI forgets the recorded face, so the next minute after
-  it is a clean one too.
+- **No flash per minute.** A minute's update is one FAST refresh. A deep
+  sleep wipes the controller's copy of what is on the glass, so the previous
+  minute is rendered again and loaded into the controller's previous-frame
+  plane WITHOUT a refresh (`cleanupGrayscaleBuffers`), and the new minute is
+  diffed against it through the driver's windowed path
+  (`HalDisplay::displayWholeFrameDifferential`). The first version painted
+  that baseline instead, and every driver promotes the first paint after
+  power-up to a full refresh, so the baseline itself was a black flash every
+  minute. On the hour, and on a sleep a person asked for, it is a clean HALF
+  refresh, which clears the ghosting fast refreshes leave. A boot that shows
+  a UI forgets the recorded face, so the next minute after it is clean too.
+
+**The weather line** under the date is the Weather app's saved forecast for
+its first place, read for the hour it is now: the sky as a mark and a word
+(Sunny, Partly cloudy, Rain...), the temperature, and the chance of rain. It
+never fetches -- a radio a minute would be a battery a day -- so it is as good
+as the last time Weather was refreshed, and it disappears once the saved
+forecast no longer covers today rather than showing old weather as new. It is
+read from the card once an hour and kept with the face in RTC memory between
+wakes. See `weather::glanceAt`.
 
 **The cost is unmeasured.** Estimated at a second or two awake per minute, it
 is a few percent of the ~1100 mAh cell a day: weeks per charge rather than

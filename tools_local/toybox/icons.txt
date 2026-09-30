@@ -493,6 +493,18 @@ clock = clock
 # The stocks app. A line over a baseline and an axis: a price over time, and
 # nothing else on the APPS shelf is a chart.
 stocks = chart-line
+
+# The Clock sleep screen's weather glance: one mark per sky, drawn beside the
+# temperature under the time.
+wx_sun     = sun
+wx_moon    = moon
+wx_partly  = cloud-sun
+wx_cloud   = cloud
+wx_fog     = cloud-fog
+wx_drizzle = cloud-drizzle
+wx_rain    = cloud-rain
+wx_snow    = cloud-snow
+wx_storm   = cloud-lightning
 # WORDLE is five letter tiles, and no Lucide icon is a row of tiles that does not
 # read as a text field. `spell-check` is letters with a tick under them: a word
 # checked, which is what every guess is. Spliced in by hand (see the warning at

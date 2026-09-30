@@ -76,10 +76,23 @@ ClockLayout buildClockScreen(toybox::Screen& screen, const ClockModel& model);
 // Pass two: the time, in whatever the title slot is bound to now.
 void buildClockFace(toybox::Screen& screen, const ClockModel& model, const ClockLayout& layout);
 
-// The sleep screen: the time, the date and the month, with the counters left
-// out because nothing on a sleeping device can be pressed. `battery` is "82%",
-// or empty to leave it off. Pass one of two, exactly like the app's screen;
-// buildClockFace is pass two.
-ClockLayout buildSleepScreen(toybox::Screen& screen, const ClockModel& model, const char* battery);
+// One line of weather under the time on the sleep screen, from the forecast
+// the Weather app last saved. Absent (present = false) when there is no saved
+// forecast that covers now, which draws nothing rather than a stale sky.
+struct SleepWeather {
+  bool present = false;
+  const freeink::Icon* icon = nullptr;
+  const char* temperature = "";  // "24 C", or "" when only the day is known
+  const char* sky = "";          // "Partly cloudy"
+  const char* rain = "";         // "10%"
+  const char* highLow = "";      // "27 / 19"
+};
+
+// The sleep screen: the time, the date, the weather and the month, with the
+// counters left out because nothing on a sleeping device can be pressed.
+// `battery` is "82%", or empty to leave it off. Pass one of two, exactly like
+// the app's screen; buildClockFace is pass two.
+ClockLayout buildSleepScreen(toybox::Screen& screen, const ClockModel& model, const char* battery,
+                             const SleepWeather& weather = SleepWeather{});
 
 }  // namespace clockui

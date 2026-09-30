@@ -293,6 +293,59 @@ static void testExportCarriesTheWholeForecast() {
   CHECK(!empty.valid(), "an empty reading knows it is empty");
 }
 
+static void testTheSleepClockGlance() {
+  CHECK(weather::skyFor(0, true) == weather::Sky::Sunny, "clear by day is sunny");
+  CHECK(weather::skyFor(1, false) == weather::Sky::Clear, "clear by night");
+  CHECK(weather::skyFor(2, true) == weather::Sky::PartlyCloudy, "partly");
+  CHECK(weather::skyFor(3, true) == weather::Sky::Cloudy, "overcast");
+  CHECK(weather::skyFor(81, true) == weather::Sky::Rain, "showers are rain");
+  CHECK(weather::skyFor(53, true) == weather::Sky::Drizzle, "drizzle");
+  CHECK(weather::skyFor(95, true) == weather::Sky::Storm, "storm");
+  CHECK(weather::skyFor(-1, true) == weather::Sky::Unknown, "absent");
+  CHECK(std::string(weather::skyWord(weather::Sky::PartlyCloudy)) == "Partly cloudy", "word");
+
+  weather::Reading r;
+  weather::Day today;
+  today.date = "2026-09-30";
+  today.code = 61;
+  today.high = 27.0f;
+  today.low = 19.0f;
+  today.precipProbability = 70.0f;
+  today.sunrise = "2026-09-30T06:05";
+  today.sunset = "2026-09-30T18:10";
+  r.days.push_back(today);
+  weather::Hour h;
+  h.time = "2026-09-30T14:00";
+  h.code = 0;
+  h.temperature = 24.4f;
+  h.precipProbability = 10.0f;
+  r.hours.push_back(h);
+  weather::Hour late = h;
+  late.time = "2026-09-30T18:00";
+  r.hours.push_back(late);
+
+  weather::Glance g = weather::glanceAt(r, "2026-09-30T14:37");
+  CHECK(g.valid && g.sky == weather::Sky::Sunny, "the hour now falls in");
+  CHECK(g.temperature.has && g.temperature.v > 24.3f, "hour temperature");
+  CHECK(g.rainChance.has && g.rainChance.v == 10.0f, "hour rain chance, not the day's");
+  CHECK(g.high.has && g.low.has, "today's range");
+
+  g = weather::glanceAt(r, "2026-09-30T18:05");
+  CHECK(g.sky == weather::Sky::Sunny, "before today's sunset is still day");
+  g = weather::glanceAt(r, "2026-09-30T18:15");
+  CHECK(g.sky == weather::Sky::Clear, "after today's sunset is night");
+
+  // Past the hours but still today: the day's row, with no temperature.
+  g = weather::glanceAt(r, "2026-09-30T21:00");
+  CHECK(g.valid && g.sky == weather::Sky::Rain && !g.temperature.has, "day fallback");
+  CHECK(g.rainChance.has && g.rainChance.v == 70.0f, "day's chance");
+
+  // A forecast from last week is not today's weather.
+  g = weather::glanceAt(r, "2026-10-07T09:00");
+  CHECK(!g.valid, "stale forecast shows nothing");
+  CHECK(!weather::glanceAt(r, "junk").valid, "bad clock string");
+}
+
 int main() {
   testCodes();
   testCompass();
@@ -303,6 +356,7 @@ int main() {
   testPlacesStore();
   testAbsenceSurvivesToTheExport();
   testExportCarriesTheWholeForecast();
+  testTheSleepClockGlance();
   // The shape scripts_local/check.sh counts with grep -c "checks, 0 failed".
   std::printf("%s  weather core: %d checks, %d failed\n", failures ? "FAIL" : "ok  ", checks, failures);
   return failures == 0 ? 0 : 1;

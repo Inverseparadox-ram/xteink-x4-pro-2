@@ -10688,6 +10688,30 @@ void testTheClockSleepScreenHasNothingToPress() {
   }
   CHECK(drewText(unset, "--:--"));
   CHECK(drewText(unset, "SET THE CLOCK IN SETTINGS"));
+  CHECK(!drewText(unset, "RAIN"));
+
+  // The weather glance, when a saved forecast covers now.
+  Rendered wet;
+  clockui::SleepWeather weather;
+  weather.present = true;
+  weather.icon = &icon_wx_partly_32;
+  weather.temperature = "24 C";
+  weather.sky = "Partly cloudy";
+  weather.rain = "10%";
+  weather.highLow = "27 / 19";
+  {
+    const fui::DeviceContext ctx = device();
+    const fui::InputSnapshot noInput{};
+    toybox::Frame frame(wet.target, ctx, noInput, wet.interactions);
+    toybox::Screen screen(frame, toybox::themeTokens());
+    const clockui::ClockLayout layout = clockui::buildSleepScreen(screen, model, "85%", weather);
+    clockui::buildClockFace(screen, model, layout);
+  }
+  CHECK(wet.interactions.count() == 0);
+  CHECK(drewText(wet, "24 C"));
+  CHECK(drewText(wet, "Partly cloudy"));
+  CHECK(drewText(wet, "10%"));
+  CHECK(drewText(wet, "30"));
 }
 
 void testEveryClockControlIsLiveAndReachable() {
