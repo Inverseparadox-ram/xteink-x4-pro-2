@@ -216,6 +216,26 @@ static void testTheMicrophoneFramesArePinned() {
   const uint8_t longer[] = {1, 0x01, 0x00};
   CHECK(!remote::decodeMacState(longer, sizeof(longer), untouched), "a longer frame is refused");
   CHECK(!untouched.known, "and changes nothing");
+
+  // TV volume: [1, 5] up and [1, 6] down, and a flag saying the Mac has a TV.
+  remote::encodeCommand(remote::MacCommand::TvVolumeUp, frame);
+  CHECK(frame[0] == 1 && frame[1] == 0x05, "TV volume up is [1, 5]");
+  remote::encodeCommand(remote::MacCommand::TvVolumeDown, frame);
+  CHECK(frame[0] == 1 && frame[1] == 0x06, "TV volume down is [1, 6]");
+  CHECK(remote::decodeCommand(frame, sizeof(frame), command) && command == remote::MacCommand::TvVolumeDown,
+        "and it round-trips");
+  const uint8_t restartByte[] = {1, 0x03};
+  CHECK(!remote::decodeCommand(restartByte, sizeof(restartByte), command), "a two-byte 0x03 is not a command");
+  remote::MacState tv;
+  tv.tvVolume = true;
+  remote::encodeMacState(tv, state);
+  CHECK(state[1] == 0x02, "TV volume is flag 0x02");
+  remote::MacState heardTv;
+  const uint8_t both[] = {1, 0x03};
+  CHECK(remote::decodeMacState(both, sizeof(both), heardTv) && heardTv.tvVolume && heardTv.microphonesMuted,
+        "both flags read together");
+  remote::MacState noTv;
+  CHECK(remote::decodeMacState(state, sizeof(state), noTv) && !noTv.microphonesMuted, "flags are independent");
 }
 
 static std::vector<uint8_t> statusFrame(const remote::StatusBoardId board, const uint8_t count, const uint8_t index,

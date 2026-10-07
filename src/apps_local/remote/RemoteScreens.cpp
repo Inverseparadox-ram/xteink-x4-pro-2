@@ -270,9 +270,11 @@ void buildRemote(toybox::Screen& screen, const RemoteModel& model) {
   //
   // The same three columns as the row above, edge to edge, so the panel reads
   // as a grid rather than two rows that almost line up.
-  iconButton(screen, fui::makeRect(toybox::kMargin, y, trio, rowH), icon_rc_voldn_40, 40, ActionVolumeDown, false);
-  iconButton(screen, fui::makeRect(static_cast<int16_t>(toybox::kMargin + trio + gutter), y, trio, rowH),
-             icon_rc_volup_40, 40, ActionVolumeUp, false);
+  const char* volumeLabel = model.tvVolume ? "TV" : nullptr;
+  iconLabelButton(screen, fui::makeRect(toybox::kMargin, y, trio, rowH), icon_rc_voldn_40, volumeLabel,
+                  ActionVolumeDown);
+  iconLabelButton(screen, fui::makeRect(static_cast<int16_t>(toybox::kMargin + trio + gutter), y, trio, rowH),
+                  icon_rc_volup_40, volumeLabel, ActionVolumeUp);
   // Filled while muted, so the button's own band carries the one piece of
   // state the remote is entitled to remember: that IT sent a mute.
   iconButton(screen,

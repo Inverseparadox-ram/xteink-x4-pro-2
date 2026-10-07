@@ -156,6 +156,13 @@ void RemoteActivity::seek(const bool forward) {
 }
 
 void RemoteActivity::volumeStep(const bool up) {
+  // With a TV set up on the Mac (tv.txt), + and - are the TV's: the helper
+  // runs its command for each step. Without one, or with no helper to ask,
+  // they are the Mac's own volume keys, as they always were.
+  if (macState_.known && macState_.tvVolume) {
+    if (remote::helper::sendCommand(up ? remote::MacCommand::TvVolumeUp : remote::MacCommand::TvVolumeDown)) return;
+    LOG_INF(kTag, "TV volume: the helper is not listening; using the Mac's volume");
+  }
   if (!remote::send(up ? remote::Key::VolumeUp : remote::Key::VolumeDown)) {
     LOG_INF(kTag, "no subscribed host; volume step dropped");
     return;
@@ -866,6 +873,7 @@ void RemoteActivity::render(RenderLock&&) {
     model.keyHeld = remote::keyHeld();
     model.micKnown = macState_.known;
     model.micMuted = macState_.microphonesMuted;
+    model.tvVolume = macState_.known && macState_.tvVolume;
     remoteui::buildRemote(screen, model);
   }
 
