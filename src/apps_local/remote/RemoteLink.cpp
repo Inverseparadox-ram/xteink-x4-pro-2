@@ -445,18 +445,7 @@ void cancel() {}
 
 bool sendCommand(MacCommand) { return false; }
 bool sendRestart(uint8_t, const char*) { return false; }
-// CROSSPOINT_SIM_TV=1 is a helper that says it has a TV set up, so the
-// labelled - and + can be rendered.
-bool takeMacState(MacState& out) {
-  static bool given = false;
-  const char* env = std::getenv("CROSSPOINT_SIM_TV");
-  if (given || env == nullptr || env[0] != '1') return false;
-  given = true;
-  out = MacState{};
-  out.known = true;
-  out.tvVolume = true;
-  return true;
-}
+bool takeMacState(MacState&) { return false; }
 
 // CROSSPOINT_SIM_STATUS=1 answers every pull with a plausible board, so pages
 // 2 and 3 can be rendered in a simulator with no Mac to describe.

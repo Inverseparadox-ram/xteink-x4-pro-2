@@ -196,14 +196,9 @@ void encodePull(const StatusBoardId board, uint8_t out[kPullLen]) {
 
 bool decodeCommand(const uint8_t* data, const size_t len, MacCommand& out) {
   if (data == nullptr || len != kCommandLen || data[0] != kMacLinkVersion) return false;
-  switch (static_cast<MacCommand>(data[1])) {
-    case MacCommand::MuteMicrophones:
-    case MacCommand::UnmuteMicrophones:
-    case MacCommand::TvVolumeUp:
-    case MacCommand::TvVolumeDown:
-      break;
-    default:
-      return false;
+  if (data[1] != static_cast<uint8_t>(MacCommand::MuteMicrophones) &&
+      data[1] != static_cast<uint8_t>(MacCommand::UnmuteMicrophones)) {
+    return false;
   }
   out = static_cast<MacCommand>(data[1]);
   return true;
@@ -211,8 +206,7 @@ bool decodeCommand(const uint8_t* data, const size_t len, MacCommand& out) {
 
 void encodeMacState(const MacState& state, uint8_t out[kMacStateLen]) {
   out[0] = kMacLinkVersion;
-  out[1] =
-      static_cast<uint8_t>((state.microphonesMuted ? kMacStateMicMuted : 0) | (state.tvVolume ? kMacStateTvVolume : 0));
+  out[1] = state.microphonesMuted ? kMacStateMicMuted : 0;
 }
 
 bool decodeMacState(const uint8_t* data, const size_t len, MacState& out) {
@@ -222,7 +216,6 @@ bool decodeMacState(const uint8_t* data, const size_t len, MacState& out) {
   if (data == nullptr || len != kMacStateLen || data[0] != kMacLinkVersion) return false;
   out.known = true;
   out.microphonesMuted = (data[1] & kMacStateMicMuted) != 0;
-  out.tvVolume = (data[1] & kMacStateTvVolume) != 0;
   return true;
 }
 

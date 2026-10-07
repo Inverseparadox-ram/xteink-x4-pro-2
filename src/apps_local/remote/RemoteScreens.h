@@ -107,10 +107,6 @@ struct RemoteModel {
   bool micKnown = false;
   bool micMuted = false;
 
-  // The Mac has a TV set up (tv.txt): - and + step the TV's volume, and say
-  // so, because a press that moves the TV and not the Mac must not surprise.
-  bool tvVolume = false;
-
   UnlockFace unlockFace = UnlockFace::Ask;
 
   // A challenge is in flight. The button's own band carries it, because a

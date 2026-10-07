@@ -10337,17 +10337,7 @@ void testEveryRemoteControlIsLive() {
   CHECK(out.has(remoteui::ActionNextPage));
   CHECK(!out.has(remoteui::ActionForget));
   CHECK(drewText(out, "1/3"));
-  CHECK(!drewText(out, "TV"));  // the Mac's volume says nothing
   CHECK(!out.interactions.overflowed());
-
-  // With a TV set up on the Mac, - and + say so, and still do the same thing.
-  Rendered tv;
-  model.tvVolume = true;
-  buildTheRemote(tv, model);
-  CHECK(drewText(tv, "TV"));
-  CHECK(tv.has(remoteui::ActionVolumeUp));
-  CHECK(tv.has(remoteui::ActionVolumeDown));
-  model.tvVolume = false;
 
   // The panel is marks. Every one of these words used to sit on a button face
   // and every one of them was a picture's job -- this is the check that keeps

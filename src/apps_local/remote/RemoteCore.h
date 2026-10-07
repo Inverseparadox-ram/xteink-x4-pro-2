@@ -93,11 +93,6 @@ inline constexpr uint8_t kMacLinkVersion = 1;
 enum class MacCommand : uint8_t {
   MuteMicrophones = 0x01,
   UnmuteMicrophones = 0x02,
-  // 0x03 and 0x04 are the restart and pull frames below, which are longer.
-  // One step of the TV's volume, through whatever the helper's tv.txt runs
-  // (an LG webOS script, say). Sent only when the Mac says it has one.
-  TvVolumeUp = 0x05,
-  TvVolumeDown = 0x06,
 };
 
 inline constexpr size_t kCommandLen = 2;
@@ -121,17 +116,15 @@ void encodeRestart(uint8_t row, const char* title, uint8_t out[kRestartLen]);
 inline constexpr uint8_t kCommandSendBoard = 0x04;
 inline constexpr size_t kPullLen = 3;  // encodePull(), beside the boards below
 
-// What the Mac reports about itself, one flag per bit, so it can grow without
-// a new characteristic.
+// What the Mac reports about itself. One bit for now, a byte so it can grow
+// without a new characteristic.
 struct MacState {
   bool known = false;             // nothing heard yet: the button claims nothing
   bool microphonesMuted = false;  // every input device the Mac has is muted
-  bool tvVolume = false;          // tv.txt is set up: + and - go to the TV
 };
 
 inline constexpr size_t kMacStateLen = 2;
 inline constexpr uint8_t kMacStateMicMuted = 0x01;
-inline constexpr uint8_t kMacStateTvVolume = 0x02;
 void encodeMacState(const MacState& state, uint8_t out[kMacStateLen]);
 bool decodeMacState(const uint8_t* data, size_t len, MacState& out);
 

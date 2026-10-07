@@ -159,7 +159,6 @@ unlock button that verifies fine and never works.
 | `crossplay-unlock services` | print what each line of `services.txt` finds right now |
 | `crossplay-unlock adopt NAME --run "CMD"` | keep a command running under launchd (also `--app`, `--docker`, `--launchd`) |
 | `crossplay-unlock unadopt NAME` | stop keeping it running and take it off the MAC page |
-| `crossplay-unlock tv [up\|down [N]]` | show the TV volume commands, or run one now (see "The TV's volume") |
 | `crossplay-unlock doctor` | print the Service doctor's session id, to open that chat yourself |
 | `crossplay-unlock claude-hook` | what Claude Code runs on each event; not for typing |
 
@@ -278,33 +277,6 @@ of tools it may use without asking: reading files, and `launchctl`, `docker`,
 `doctor/` folder beside the ledger, finds `claude` in `~/.local/bin`,
 `~/.claude/local`, Homebrew or your login shell's PATH, and is stopped after
 ten minutes.
-
-## The TV's volume
-
-The reader's - and + can drive a TV instead of the Mac: the helper runs a
-command of yours for each press, typically the Python script that talks to an
-LG webOS TV. Edit `tv.txt` beside the ledger (written with instructions the
-first time the helper runs):
-
-    up   = python3 ~/lgtv/lgtv.py volume up
-    down = python3 ~/lgtv/lgtv.py volume down
-
-- Each runs from your home folder with a terminal's PATH, so `~` paths and
-  Homebrew's `python3` work; give a venv's python by its full path if the
-  script needs one.
-- Presses that arrive while one is still running are counted, and up and down
-  cancel out, so a burst of taps never plays back late. Put `{steps}` in a
-  command and it runs once with the count instead of once per press
-  (`... volume up {steps}`).
-- Each run is given 15 seconds; failures and the script's last output go to
-  `/tmp/crossplay-unlock.log`.
-- Try it from a terminal first: `crossplay-unlock tv` shows what is set up,
-  `crossplay-unlock tv up 2` runs it now and prints what the script said.
-
-While both lines are set, the helper tells the reader (flag `0x02` in the Mac
-state), and the buttons read *- TV* and *+ TV*. The reader learns it when it
-connects, so after editing `tv.txt`, close and reopen the Remote app. Take the
-lines out and - and + are the Mac's volume again.
 
 ## Keyboard layout
 

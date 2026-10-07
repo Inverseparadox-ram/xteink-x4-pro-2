@@ -252,23 +252,6 @@ letters land but the symbols do not. Nothing comes back over HID, so the
 symptom is a password that silently fails, and there is nothing the reader can
 do about it.
 
-## The TV's volume
-
-With a TV set up on the Mac, **- and + step the TV's volume** instead of the
-Mac's: on the panel and on the side keys alike, and both buttons then read
-*- TV* and *+ TV*, so a press that moves the TV and not the Mac is never a
-surprise.
-
-The reader cannot reach the TV itself; the Mac helper runs whatever command
-its `tv.txt` names (an LG webOS script, say) once per press. The helper says
-it has one with flag `0x02` in the Mac state frame (`kMacStateTvVolume`), and
-the reader then sends `[1, 5]` (up) or `[1, 6]` (down) on the command
-characteristic rather than the HID volume keys. Without the flag (no helper
-connected, or no `tv.txt`), or if the helper stops listening, - and + are the
-Mac's own volume keys exactly as before. Mute stays the Mac's.
-
-See `tools_local/remote-mac/README.md`, "The TV's volume".
-
 ## Now playing
 
 The title and artist of whatever Music or Spotify is playing, in the status row

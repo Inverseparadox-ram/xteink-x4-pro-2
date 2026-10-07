@@ -59,12 +59,7 @@ enum Wire {
     // [version, 0x04, board]: send that board now. The boards are pulled; the
     // reader asks when a page opens and on REFRESH.
     static let commandSendBoard: UInt8 = 0x04
-    // [version, 0x05] / [version, 0x06]: one step of the TV's volume (tv.txt).
-    static let commandTvUp: UInt8 = 0x05
-    static let commandTvDown: UInt8 = 0x06
     static let flagMicrophonesMuted: UInt8 = 0x01
-    // tv.txt is set up, so the reader's - and + are the TV's.
-    static let flagTvVolume: UInt8 = 0x02
 
     static let version: UInt8 = 1
     static let nonceLen = 16
@@ -1361,115 +1356,6 @@ enum Doctor {
     }
 }
 
-// MARK: The TV's volume (the reader's - and +)
-//
-// tv.txt, beside the ledger: the command that steps the TV's volume up and the
-// one that steps it down, run once per press. An LG webOS script, typically.
-// While both are set the Mac state carries flagTvVolume, and the reader sends
-// its - and + here instead of pressing the Mac's own volume keys.
-enum TV {
-    static var path: URL { supportDirectory().appendingPathComponent("tv.txt") }
-
-    static let sample = """
-    # The reader's - and + buttons, for a TV. One command for each; the helper
-    # runs it once per press, from your home folder, with a terminal's PATH.
-    # Put {steps} in a command and it runs once for all the presses that were
-    # waiting, with {steps} replaced by how many (for a script that takes a count).
-    #
-    # Take the # off up and down and point them at your script, for example:
-    #
-    # up   = python3 ~/lgtv/lgtv.py volume up
-    # down = python3 ~/lgtv/lgtv.py volume down
-    #
-    # While both are set, the reader's - and + read "TV" and drive the TV. Check
-    # them here first: crossplay-unlock tv up
-
-    """
-
-    struct Commands {
-        var up: String
-        var down: String
-    }
-
-    // nil until both lines are set. Writes the sample the first time.
-    static func commands() -> Commands? {
-        if !FileManager.default.fileExists(atPath: path.path) {
-            try? sample.data(using: .utf8)?.write(to: path)
-            return nil
-        }
-        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return nil }
-        var up = ""
-        var down = ""
-        for raw in text.split(separator: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("#") { continue }
-            guard let equals = line.firstIndex(of: "=") else { continue }
-            let key = line[..<equals].trimmingCharacters(in: .whitespaces).lowercased()
-            let value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-            if key == "up" { up = value }
-            if key == "down" { down = value }
-        }
-        return up.isEmpty || down.isEmpty ? nil : Commands(up: up, down: down)
-    }
-
-    // Presses arrive faster than a script that opens a connection to the TV
-    // can run. They are counted, up as +1 and down as -1, and each run takes
-    // all that are waiting, so a burst of taps is one run and up-then-down
-    // cancels out rather than playing back late.
-    private static let queue = DispatchQueue(label: "crossplay.tv")
-    private static let lock = NSLock()
-    private static var pending = 0
-    private static var running = false
-
-    static func step(up: Bool) {
-        lock.lock()
-        pending += up ? 1 : -1
-        let start = !running
-        if start { running = true }
-        lock.unlock()
-        if start { queue.async { drain() } }
-    }
-
-    private static func drain() {
-        while true {
-            lock.lock()
-            let steps = pending
-            pending = 0
-            if steps == 0 {
-                running = false
-                lock.unlock()
-                return
-            }
-            lock.unlock()
-            run(steps: steps)
-        }
-    }
-
-    // Positive is up. Runs the command, or the {steps} form once.
-    @discardableResult
-    static func run(steps: Int) -> (status: Int32, output: String) {
-        guard steps != 0 else { return (0, "") }
-        guard let commands = commands() else {
-            log("TV: tv.txt has no up and down commands; nothing ran")
-            return (-1, "tv.txt has no up and down commands")
-        }
-        let template = steps > 0 ? commands.up : commands.down
-        let count = min(abs(steps), 20)
-        let script = template.contains("{steps}")
-            ? template.replacingOccurrences(of: "{steps}", with: "\(count)")
-            : Array(repeating: template, count: count).joined(separator: " &&\n")
-        let result = runTool("/bin/sh", ["-c", "cd \"$HOME\"\n\(Services.shellPrelude)\n{\n\(script)\n} 2>&1"],
-                             timeout: TimeInterval(min(15 * count, 120)))
-        let direction = steps > 0 ? "up" : "down"
-        if result.status == 0 {
-            log("TV: volume \(direction) \(count)")
-        } else {
-            log("TV: volume \(direction) \(count) failed (status \(result.status)): \(result.output.suffix(300))")
-        }
-        return result
-    }
-}
-
 // MARK: Keeping services alive (`adopt`)
 //
 // The first line of defence: a service macOS itself keeps running, so the
@@ -1640,8 +1526,7 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     private func sendMacState() {
-        var flags: UInt8 = microphones.allMuted ? Wire.flagMicrophonesMuted : 0
-        if TV.commands() != nil { flags |= Wire.flagTvVolume }
+        let flags: UInt8 = microphones.allMuted ? Wire.flagMicrophonesMuted : 0
         let frame = Data([Wire.macLinkVersion, flags])
         guard frame != lastMacState else { return }
         guard let characteristic = macStateCharacteristic, let peripheral = reader else { return }
@@ -1700,12 +1585,6 @@ final class Agent: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             return
         }
         switch bytes[1] {
-        case Wire.commandTvUp, Wire.commandTvDown:
-            TV.step(up: bytes[1] == Wire.commandTvUp)
-            // And tell the reader again whether a TV is set up, so a tv.txt
-            // emptied since it connected sends the next press to the Mac.
-            sendMacState()
-            return
         case Wire.commandMute: microphones.mute()
         case Wire.commandUnmute: microphones.unmute()
         default:
@@ -2020,27 +1899,6 @@ case "adopt": Adopt.command(Array(CommandLine.arguments.dropFirst(2)))
 case "unadopt":
     guard CommandLine.arguments.count >= 3 else { Adopt.usage() }
     Adopt.remove(CommandLine.arguments[2])
-case "tv":
-    // `tv` says what is set up; `tv up [N]` / `tv down [N]` runs it now, the way
-    // a press from the reader would, and prints what the script said.
-    let args = Array(CommandLine.arguments.dropFirst(2))
-    if args.isEmpty {
-        if let commands = TV.commands() {
-            print("up:   \(commands.up)\ndown: \(commands.down)")
-        } else {
-            print("No TV set up: the reader's - and + are the Mac's volume. Edit \(TV.path.path)")
-        }
-        exit(0)
-    }
-    guard args[0] == "up" || args[0] == "down" else {
-        print("usage: crossplay-unlock tv [up|down [N]]")
-        exit(2)
-    }
-    let count = max(1, args.count > 1 ? Int(args[1]) ?? 1 : 1)
-    let result = TV.run(steps: args[0] == "up" ? count : -count)
-    print(result.output.isEmpty ? "(no output)" : result.output)
-    print("exit \(result.status)")
-    exit(result.status == 0 ? 0 : 1)
 case "doctor":
     let id = ((try? String(contentsOf: Doctor.sessionFile, encoding: .utf8)) ?? "")
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2053,6 +1911,6 @@ case "services":
     }
     print("edit: \(Services.path.path)")
 default:
-    print("usage: crossplay-unlock [pair|password|unblock|status|forget|run|claude-setup|services|adopt|unadopt|doctor|tv]")
+    print("usage: crossplay-unlock [pair|password|unblock|status|forget|run|claude-setup|services|adopt|unadopt|doctor]")
     exit(2)
 }
